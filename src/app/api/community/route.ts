@@ -40,3 +40,26 @@ export async function GET(req: Request) {
   })
   return NextResponse.json({ posts: posts.map(mapPost) })
 }
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+    const { title, content, category, author, tags, featured } = body
+    if (!title || !content || !author) {
+      return NextResponse.json({ error: "제목, 내용, 작성자는 필수입니다." }, { status: 400 })
+    }
+    const created = await db.communityPost.create({
+      data: {
+        title,
+        content,
+        category: category ?? "use-case",
+        author,
+        tags: JSON.stringify(tags ?? []),
+        featured: !!featured,
+      },
+    })
+    return NextResponse.json({ post: mapPost(created) })
+  } catch (e: any) {
+    return NextResponse.json({ error: "생성 실패" }, { status: 500 })
+  }
+}

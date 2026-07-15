@@ -10,6 +10,8 @@ export type ViewKey =
   | "mini-tools"
   | "solutions"
   | "community"
+  | "my-page"
+  | "admin"
 
 interface NavState {
   view: ViewKey

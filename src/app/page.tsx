@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion"
 import { Header } from "@/components/layout/header"
 import { Footer } from "@/components/layout/footer"
 import { useNav } from "@/lib/store"
+import { useAuth } from "@/lib/auth"
 import { HomeView } from "@/components/views/home-view"
 import { ToolsView } from "@/components/views/tools-view"
 import { PromptsView } from "@/components/views/prompts-view"
@@ -12,9 +13,13 @@ import { MetaPromptView } from "@/components/views/meta-prompt-view"
 import { MiniToolsView } from "@/components/views/mini-tools-view"
 import { SolutionsView } from "@/components/views/solutions-view"
 import { CommunityView } from "@/components/views/community-view"
+import { MyPageView } from "@/components/views/my-page-view"
+import { AdminView } from "@/components/views/admin-view"
 
 export default function Page() {
   const view = useNav((s) => s.view)
+  const hydrate = useAuth((s) => s.hydrate)
+  hydrate()
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -35,6 +40,8 @@ export default function Page() {
             {view === "mini-tools" && <MiniToolsView />}
             {view === "solutions" && <SolutionsView />}
             {view === "community" && <CommunityView />}
+            {view === "my-page" && <MyPageView />}
+            {view === "admin" && <AdminView />}
           </motion.div>
         </AnimatePresence>
       </main>

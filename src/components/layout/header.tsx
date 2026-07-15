@@ -1,12 +1,13 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { motion, AnimatePresence } from "framer-motion"
 import { Menu, X, Sparkles } from "lucide-react"
 import { useNav, type ViewKey } from "@/lib/store"
 import { ThemeToggle } from "@/components/theme/theme-toggle"
 import { Button } from "@/components/ui/button"
+import { UserMenu } from "@/components/auth/user-menu"
+import { LoginModal } from "@/components/auth/login-modal"
 import { cn } from "@/lib/utils"
 
 const NAV_ITEMS: { key: ViewKey; label: string }[] = [
@@ -22,6 +23,7 @@ export function Header() {
   const { view, setView } = useNav()
   const [scrolled, setScrolled] = React.useState(false)
   const [mobileOpen, setMobileOpen] = React.useState(false)
+  const [loginOpen, setLoginOpen] = React.useState(false)
 
   React.useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8)
@@ -94,12 +96,13 @@ export function Header() {
           <Button
             variant="ghost"
             size="sm"
-            className="hidden sm:inline-flex text-muted-foreground hover:text-foreground"
+            className="hidden md:inline-flex text-muted-foreground hover:text-foreground"
             onClick={() => go("meta-prompt")}
           >
             시작하기
           </Button>
           <ThemeToggle />
+          <UserMenu onLogin={() => setLoginOpen(true)} />
           {/* Mobile menu trigger */}
           <Button
             variant="ghost"
@@ -142,6 +145,8 @@ export function Header() {
           </motion.nav>
         )}
       </AnimatePresence>
+
+      <LoginModal open={loginOpen} onOpenChange={setLoginOpen} />
     </header>
   )
 }

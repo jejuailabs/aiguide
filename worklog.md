@@ -58,3 +58,28 @@ Stage Summary:
 - Bug fixed: hero "완성하는 곳" now displays as visible amber-gold gradient text in BOTH light and dark mode
 - Lint clean, no console errors
 - CSS specificity hardened against future regressions
+
+---
+Task ID: 2
+Agent: Main (Z.ai Code)
+Task: Add login (Google), My Page, and Admin Dashboard to AI Guide Portal
+
+Work Log:
+- Built auth system: Zustand store (src/lib/auth.ts) with localStorage persistence, tiers (guest/free/premium/admin), simulated Google OAuth (real OAuth needs credentials not available in sandbox), demo accounts (김가이드/Free, 관리자/Admin)
+- Built LoginModal (src/components/auth/login-modal.tsx): Google-branded button, simulated OAuth flow (loading → account picker → completing → done), guest mode, admin demo entry, premium gradient header, honest demo disclaimer
+- Built UserMenu (src/components/auth/user-menu.tsx): login button when logged out; avatar dropdown when logged in (profile head w/ tier badge, 마이페이지, 관리자 대시보드 [admin only], Premium 업그레이드 [free only], 로그아웃)
+- Updated Header: integrated UserMenu + LoginModal, added hydrate() call in page.tsx
+- Extended nav store with my-page & admin view keys
+- Built MyPageView: profile hero card (avatar, name, tier badge, email, joined date, Google auth), stats strip (favorites/posts/saved), Premium upsell card for free tier (with upgrade button that actually upgrades), tabs (즐겨찾기/내 활동/설정), settings (theme switch, notifications, privacy, account management), empty states with CTAs
+- Built AdminView: dark CMS aesthetic, admin guard (blocks non-admin), overview stats grid (6 content types), tabbed management (공지사항/커뮤니티/프롬프트/AI도구/솔루션/미니툴)
+- Functional CRUD: AnnouncementsManager (create dialog with title/content/type/pinned + delete w/ confirm), CommunityManager (create with title/content/category/tags/featured + delete), SimpleManager for prompts (delete), readonly tables for tools/solutions/minitools
+- Added API routes: POST /api/announcements, POST /api/community, DELETE /api/announcements/[id], DELETE /api/community/[id], DELETE /api/prompts/[id]
+- Browser-verified full flows: Google login (modal → account picker → success → admin auto-redirect), admin dashboard CRUD (created announcement "새로운 AI 도구 3종 추가 예정" w/ pinned, deleted another w/ confirm dialog), my-page for free user (Premium upsell card visible, upgrade worked), my-page for admin (Premium card hidden), guest mode (no admin menu entry), logout
+
+Stage Summary:
+- Complete auth + member system matching the service spec (Guest/Free/Premium/Admin tiers)
+- Google login button with faithful OAuth simulation (account picker, loading states)
+- My Page: profile, tier badge, saved prompts, activity, settings, premium upgrade (functional)
+- Admin Dashboard: 6-tab CMS with working create/delete for announcements & community, delete for prompts, overview stats, admin access guard
+- All CRUD operations reflect on main screen automatically (announcements appear on home)
+- Lint clean, no errors, all API routes return 200
