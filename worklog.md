@@ -38,3 +38,23 @@ Stage Summary:
 - Fully responsive (mobile menu, 2-col grid on mobile)
 - Sticky footer, no console/runtime errors, clean lint
 - All APIs return 200 with real seeded data
+
+---
+Task ID: 1-fix
+Agent: Main (Z.ai Code)
+Task: Fix "갈색 블록" bug on hero gradient text in light mode
+
+Work Log:
+- User reported mysterious brown block in center of home hero section
+- Used VLM (z-ai vision) to analyze screenshot → identified the block was where "완성하는 곳" text should be
+- Inspected computed styles via agent-browser: in light mode `webkitBackgroundClip` was "border-box" instead of "text" (dark mode was correct)
+- Root cause: `.text-gradient-amber` was inside `@layer utilities` with low specificity, AND used `oklch(from var(--foreground) l c h)` relative-color syntax. Dark mode rule `.dark .text-gradient-amber` had higher specificity so it worked, but light mode rule got overridden
+- Fix: moved `.text-gradient-amber` rules outside `@layer utilities`, replaced relative-color syntax with direct OKLCH values, added `!important` to background-clip/text-fill-color to guarantee override, and brightened gradient stops (0.42→0.58→0.68) for a more vivid amber/gold gradient
+- Also added explicit `.dark` variants for glow-amber and mesh-bg (replaced relative-color syntax there too)
+- Dev server restart was needed for CSS to recompile (Turbopack didn't pick up the change on hot-reload alone)
+- Verified via VLM: text now renders as "따뜻한 앰버/골드 계열 그라데이션" in light mode, and dark mode still works correctly
+
+Stage Summary:
+- Bug fixed: hero "완성하는 곳" now displays as visible amber-gold gradient text in BOTH light and dark mode
+- Lint clean, no console errors
+- CSS specificity hardened against future regressions
