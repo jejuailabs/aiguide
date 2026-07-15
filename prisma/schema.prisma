@@ -1,0 +1,113 @@
+// AI Guide Portal — Prisma Schema
+// SQLite-compatible. Arrays stored as JSON strings.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AITool {
+  id          String   @id @default(cuid())
+  name        String
+  tagline     String
+  description String
+  category    String
+  icon        String   // lucide icon name or emoji
+  price       String   // "무료", "유료", "부분 무료" 등
+  platforms   String   // JSON string array: ["web","ios","android"]
+  useCases    String   // JSON string array
+  websiteUrl  String
+  appStoreUrl String?
+  playStoreUrl String?
+  featured    Boolean  @default(false)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Prompt {
+  id            String   @id @default(cuid())
+  title         String
+  description   String
+  body          String   // full prompt text
+  category      String
+  bestModel     String
+  runUrl        String?
+  sampleImage   String?
+  tags          String   // JSON string array
+  version       String   @default("1.0")
+  favorites     Int      @default(0)
+  order         Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MetaPromptTemplate {
+  id          String   @id @default(cuid())
+  resultType  String   // image, video, report, ppt, website, vibe, document, code, other
+  label       String   // "이미지"
+  icon        String
+  schemaJson  String   // JSON: requirement schema definition
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model MiniTool {
+  id          String   @id @default(cuid())
+  name        String
+  description String
+  icon        String
+  category    String
+  actionType  String   // "qr", "json", "base64", "markdown", "url-encode", "text-case", "static"
+  isInteractive Boolean @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model VibeSolution {
+  id            String   @id @default(cuid())
+  title         String
+  tagline       String
+  description   String
+  url           String
+  thumbnail     String
+  features      String   // JSON string array
+  purpose       String
+  category      String
+  aiUsed        String?  // JSON string array (optional)
+  techStack     String?  // JSON string array (optional)
+  featured      Boolean  @default(false)
+  order         Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model CommunityPost {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  category    String   // question, prompt-share, use-case, news
+  author      String
+  authorAvatar String?
+  likes       Int      @default(0)
+  comments    Int      @default(0)
+  featured    Boolean  @default(false)
+  tags        String   // JSON string array
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  type        String   // "notice", "update", "event"
+  pinned      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
