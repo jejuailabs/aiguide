@@ -10,6 +10,7 @@ export type ViewKey =
   | "mini-tools"
   | "solutions"
   | "community"
+  | "vibe-guide"
   | "my-page"
   | "admin"
 

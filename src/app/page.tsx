@@ -13,6 +13,7 @@ import { MetaPromptView } from "@/components/views/meta-prompt-view"
 import { MiniToolsView } from "@/components/views/mini-tools-view"
 import { SolutionsView } from "@/components/views/solutions-view"
 import { CommunityView } from "@/components/views/community-view"
+import { VibeGuideView } from "@/components/views/vibe-guide-view"
 import { MyPageView } from "@/components/views/my-page-view"
 import { AdminView } from "@/components/views/admin-view"
 
@@ -40,6 +41,7 @@ export default function Page() {
             {view === "mini-tools" && <MiniToolsView />}
             {view === "solutions" && <SolutionsView />}
             {view === "community" && <CommunityView />}
+            {view === "vibe-guide" && <VibeGuideView />}
             {view === "my-page" && <MyPageView />}
             {view === "admin" && <AdminView />}
           </motion.div>

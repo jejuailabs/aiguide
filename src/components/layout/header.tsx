@@ -17,6 +17,7 @@ const NAV_ITEMS: { key: ViewKey; label: string }[] = [
   { key: "mini-tools", label: "AI 미니툴" },
   { key: "solutions", label: "바이브코딩 솔루션" },
   { key: "community", label: "커뮤니티" },
+  { key: "vibe-guide", label: "바이브코딩 가이드" },
 ]
 
 export function Header() {
