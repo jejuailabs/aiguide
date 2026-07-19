@@ -3,8 +3,8 @@
 import * as React from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
-  Wand2, ArrowRight, ArrowLeft, Sparkles, Copy, Check, Loader2,
-  RefreshCw, Lightbulb, AlertTriangle, CheckCircle2, ExternalLink, Pencil,
+  Wand2, ArrowLeft, Sparkles, Copy, Check, Loader2,
+  RefreshCw, Lightbulb, CheckCircle2, Pencil, ChevronDown, FileText,
 } from "lucide-react"
 import { useFetch, useCopy } from "@/lib/hooks"
 import { Card } from "@/components/ui/card"
@@ -18,20 +18,10 @@ import { ViewHeader } from "@/components/views/view-header"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import type { MetaTemplateDTO } from "@/lib/types"
+import { getQuestions, type BankQuestion } from "@/lib/meta-questions"
 
-type Phase = "select" | "input" | "conversation" | "result"
+type Phase = "select" | "questions" | "result"
 
-interface Question {
-  field: string
-  prompt: string
-  options: string[]
-  allowCustom: boolean
-  allowAI: boolean
-}
-interface Conflict {
-  description: string
-  options: string[]
-}
 interface GeneratedPrompt {
   model: string
   prompt: string
@@ -44,14 +34,13 @@ export function MetaPromptView() {
 
   const [phase, setPhase] = React.useState<Phase>("select")
   const [template, setTemplate] = React.useState<MetaTemplateDTO | null>(null)
-  const [fields, setFields] = React.useState<string[]>([])
+  const [questions, setQuestions] = React.useState<BankQuestion[]>([])
+  const [idx, setIdx] = React.useState(0)
+  const [answers, setAnswers] = React.useState<Record<string, string>>({})
+  const [prefilled, setPrefilled] = React.useState<Set<string>>(new Set())
   const [materials, setMaterials] = React.useState("")
-  const [schema, setSchema] = React.useState<Record<string, string>>({})
-  const [history, setHistory] = React.useState<{ field: string; question: string; answer: string }[]>([])
-  const [question, setQuestion] = React.useState<Question | null>(null)
-  const [conflict, setConflict] = React.useState<Conflict | null>(null)
-  const [completeness, setCompleteness] = React.useState(0)
-  const [done, setDone] = React.useState(false)
+  const [showMaterials, setShowMaterials] = React.useState(false)
+  const [analyzing, setAnalyzing] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
   const [customInput, setCustomInput] = React.useState("")
   const [showCustom, setShowCustom] = React.useState(false)
@@ -60,37 +49,54 @@ export function MetaPromptView() {
     prompts: GeneratedPrompt[]
   } | null>(null)
 
+  const total = questions.length
+  const answeredCount = questions.filter((q) => answers[q.field]).length
+  const completeness = total > 0 ? Math.round((answeredCount / total) * 100) : 0
+  const current = questions[idx] ?? null
+
   const reset = () => {
     setPhase("select")
     setTemplate(null)
-    setFields([])
+    setQuestions([])
+    setIdx(0)
+    setAnswers({})
+    setPrefilled(new Set())
     setMaterials("")
-    setSchema({})
-    setHistory([])
-    setQuestion(null)
-    setConflict(null)
-    setCompleteness(0)
-    setDone(false)
+    setShowMaterials(false)
     setCustomInput("")
     setShowCustom(false)
     setGenerated(null)
   }
 
-  const onSelectTemplate = (t: MetaTemplateDTO) => {
-    setTemplate(t)
-    try {
-      const parsed = JSON.parse(t.schemaJson)
-      setFields(parsed.fields ?? [])
-    } catch {
-      setFields([])
+  /** 다음 미응답 질문 인덱스를 찾는다. 없으면 -1 */
+  const nextUnanswered = (from: number, a: Record<string, string>) => {
+    for (let i = from; i < questions.length; i++) {
+      if (!a[questions[i].field]) return i
     }
-    setPhase("input")
+    for (let i = 0; i < from; i++) {
+      if (!a[questions[i].field]) return i
+    }
+    return -1
   }
 
-  const startConversation = async () => {
-    if (!template) return
-    setLoading(true)
-    setPhase("conversation")
+  const onSelectTemplate = (t: MetaTemplateDTO) => {
+    setTemplate(t)
+    let fields: string[] = []
+    try {
+      fields = JSON.parse(t.schemaJson).fields ?? []
+    } catch { /* noop */ }
+    const qs = getQuestions(t.resultType, fields)
+    setQuestions(qs)
+    setIdx(0)
+    setAnswers({})
+    setPrefilled(new Set())
+    setPhase("questions")
+  }
+
+  /** 참고자료 AI 분석 → 답변 자동 채움 */
+  const analyzeMaterials = async () => {
+    if (!template || !materials.trim()) return
+    setAnalyzing(true)
     try {
       const res = await fetch("/api/meta-prompt", {
         method: "POST",
@@ -99,100 +105,73 @@ export function MetaPromptView() {
           action: "start",
           resultType: template.resultType,
           resultLabel: template.label,
-          fields,
+          fields: questions.map((q) => q.field),
           materials,
         }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? "시작 실패")
-      applyResponse(data)
+      if (!res.ok) throw new Error(data.error ?? "분석 실패")
+      const schema: Record<string, string> = data.schema ?? {}
+      const filled = new Set<string>()
+      const merged = { ...answers }
+      for (const q of questions) {
+        const v = (schema[q.field] ?? "").trim()
+        if (v && !merged[q.field]) {
+          merged[q.field] = v
+          filled.add(q.field)
+        }
+      }
+      setAnswers(merged)
+      setPrefilled(filled)
+      setShowMaterials(false)
+      if (filled.size > 0) {
+        toast.success(`참고자료 분석으로 ${filled.size}개 항목이 자동 완성되었습니다`)
+      } else {
+        toast.info("자동으로 채울 수 있는 항목을 찾지 못했습니다")
+      }
+      const remain = questions.findIndex((q) => !merged[q.field])
+      if (remain === -1) {
+        generate(merged)
+      } else {
+        setIdx(remain)
+      }
     } catch (e: any) {
-      toast.error(e.message ?? "AI 엔진 응답에 실패했습니다.")
-      setPhase("input")
+      toast.error(e.message ?? "참고자료 분석에 실패했습니다.")
     } finally {
-      setLoading(false)
+      setAnalyzing(false)
     }
   }
 
-  const applyResponse = (data: any) => {
-    setSchema(data.schema ?? {})
-    setCompleteness(data.completeness ?? 0)
-    setDone(!!data.done)
-    setConflict(data.conflict ?? null)
-    setQuestion(data.nextQuestion ?? null)
+  const answer = (value: string) => {
+    if (!current) return
+    const merged = { ...answers, [current.field]: value }
+    setAnswers(merged)
     setCustomInput("")
     setShowCustom(false)
-  }
-
-  const answer = async (value: string) => {
-    if (!question || !template) return
-    const field = question.field
-    const q = question.prompt
-    setHistory((h) => [...h, { field, question: q, answer: value }])
-    setLoading(true)
-    try {
-      const res = await fetch("/api/meta-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "step",
-          resultType: template.resultType,
-          resultLabel: template.label,
-          fields,
-          materials,
-          schema,
-          history: [...history, { field, question: q, answer: value }],
-          lastAnswer: { field, value },
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? "응답 실패")
-      applyResponse(data)
-      if (data.done) {
-        // auto-generate
-        setTimeout(() => generate({ ...schema, ...(data.schema ?? {}) }), 600)
-      }
-    } catch (e: any) {
-      toast.error(e.message ?? "AI 엔진 응답에 실패했습니다.")
-    } finally {
-      setLoading(false)
+    const next = nextUnanswered(idx + 1, merged)
+    if (next === -1) {
+      generate(merged)
+    } else {
+      setIdx(next)
     }
   }
 
-  const resolveConflict = async (value: string) => {
-    if (!template) return
-    setLoading(true)
-    try {
-      const res = await fetch("/api/meta-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "step",
-          resultType: template.resultType,
-          resultLabel: template.label,
-          fields,
-          materials,
-          schema,
-          history,
-          lastAnswer: { field: "__conflict__", value },
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? "응답 실패")
-      applyResponse(data)
-      if (data.done) {
-        setTimeout(() => generate({ ...schema, ...(data.schema ?? {}) }), 600)
+  const goBack = () => {
+    // 직전 답변한 질문으로 이동해 다시 선택할 수 있게
+    for (let i = idx - 1; i >= 0; i--) {
+      if (answers[questions[i].field]) {
+        const merged = { ...answers }
+        delete merged[questions[i].field]
+        setAnswers(merged)
+        setIdx(i)
+        return
       }
-    } catch (e: any) {
-      toast.error(e.message ?? "AI 엔진 응답에 실패했습니다.")
-    } finally {
-      setLoading(false)
     }
   }
 
-  const generate = async (finalSchema?: Record<string, string>) => {
+  const generate = async (finalAnswers?: Record<string, string>) => {
     if (!template) return
-    const s = finalSchema ?? schema
+    const schema = finalAnswers ?? answers
     setLoading(true)
     try {
       const res = await fetch("/api/meta-prompt", {
@@ -202,9 +181,9 @@ export function MetaPromptView() {
           action: "generate",
           resultType: template.resultType,
           resultLabel: template.label,
-          fields,
+          fields: questions.map((q) => q.field),
           materials,
-          schema: s,
+          schema,
         }),
       })
       const data = await res.json()
@@ -223,13 +202,13 @@ export function MetaPromptView() {
       <ViewHeader
         eyebrow="메타 프롬프트 엔지니어"
         title="가장 적은 질문으로 완성도 높은 프롬프트를"
-        desc="원하는 결과물을 선택하고 가진 자료를 입력하세요. AI가 의도를 분석해 필요한 것만 한 번에 하나씩 묻고, 방향성 충돌까지 감지합니다."
+        desc="결과물을 선택하면 꼭 필요한 질문만 버튼으로 골라 답합니다. 10단계 안에 최적화된 프롬프트가 완성됩니다."
       />
 
-      {/* Stepper */}
-      <Stepper phase={phase} completeness={completeness} className="mt-8" />
+      <Stepper phase={phase} className="mt-8" />
 
       <AnimatePresence mode="wait">
+        {/* ---------- 1단계: 결과물 선택 ---------- */}
         {phase === "select" && (
           <motion.div
             key="select"
@@ -241,7 +220,7 @@ export function MetaPromptView() {
             <p className="mb-4 text-sm font-medium text-muted-foreground">
               원하는 최종 결과물을 선택하세요
             </p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {templates.map((t) => (
                 <button
                   key={t.id}
@@ -260,52 +239,10 @@ export function MetaPromptView() {
           </motion.div>
         )}
 
-        {phase === "input" && (
+        {/* ---------- 2단계: 객관식 질문 ---------- */}
+        {phase === "questions" && (
           <motion.div
-            key="input"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="mt-8"
-          >
-            <SelectedTypeChip template={template} onReset={reset} />
-            <Card className="mt-4 p-6">
-              <label className="mb-2 block text-sm font-medium">
-                가진 자료를 자유롭게 입력하세요
-              </label>
-              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
-                아이디어, 기존 프롬프트, 메모, 참고자료 설명 등 무엇이든 좋습니다.
-                AI가 입력을 분석해 자동으로 요구사항을 채웁니다.
-              </p>
-              <Textarea
-                value={materials}
-                onChange={(e) => setMaterials(e.target.value)}
-                placeholder="예) 제주 감성카페를 홍보할 유튜브 썸네일. 따뜻한 색감에 여백이 넓었으면 좋겠어."
-                className="min-h-[140px] resize-none text-base"
-              />
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <Button variant="ghost" onClick={reset}>
-                  <ArrowLeft className="size-4" /> 다시 선택
-                </Button>
-                <Button
-                  onClick={startConversation}
-                  disabled={!materials.trim() || loading}
-                  className="min-w-[160px]"
-                >
-                  {loading ? (
-                    <><Loader2 className="size-4 animate-spin" /> 분석 중...</>
-                  ) : (
-                    <>AI 분석 시작 <ArrowRight className="size-4" /></>
-                  )}
-                </Button>
-              </div>
-            </Card>
-          </motion.div>
-        )}
-
-        {phase === "conversation" && (
-          <motion.div
-            key="conv"
+            key="questions"
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
@@ -313,110 +250,147 @@ export function MetaPromptView() {
           >
             <SelectedTypeChip template={template} onReset={reset} />
 
-            {/* History */}
-            {history.length > 0 && (
+            {/* 진행 상황 */}
+            <div className="rounded-2xl border border-border/60 bg-card p-4">
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="font-semibold">
+                  질문 {Math.min(answeredCount + 1, total)} / {total}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  완성도 <span className="font-semibold text-primary">{completeness}%</span>
+                  {completeness >= 90 && " · 곧 생성됩니다"}
+                </span>
+              </div>
+              <Progress value={completeness} className="h-1.5" />
+            </div>
+
+            {/* 참고자료 (선택) — AI가 분석해 답변 자동 채움 */}
+            {answeredCount === 0 && (
+              <div className="rounded-2xl border border-dashed border-border/60">
+                <button
+                  onClick={() => setShowMaterials((v) => !v)}
+                  className="flex w-full items-center justify-between px-4 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="size-4" />
+                    참고자료가 있다면 붙여넣기 (선택사항 — AI가 분석해 질문을 건너뜁니다)
+                  </span>
+                  <ChevronDown className={cn("size-4 transition-transform", showMaterials && "rotate-180")} />
+                </button>
+                <AnimatePresence>
+                  {showMaterials && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="space-y-3 px-4 pb-4">
+                        <Textarea
+                          value={materials}
+                          onChange={(e) => setMaterials(e.target.value)}
+                          placeholder="예) 제주 감성카페 홍보용. 따뜻한 색감에 여백 넓게, 유튜브에 올릴 거야."
+                          className="min-h-[100px] resize-none"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={analyzeMaterials}
+                          disabled={!materials.trim() || analyzing}
+                        >
+                          {analyzing ? (
+                            <><Loader2 className="size-4 animate-spin" /> 분석 중...</>
+                          ) : (
+                            <><Sparkles className="size-4" /> AI로 자동 채우기</>
+                          )}
+                        </Button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {/* 자동 완성된 항목 요약 */}
+            {prefilled.size > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs">
+                <Sparkles className="size-3.5 text-primary" />
+                <span className="text-muted-foreground">자동 완성:</span>
+                {questions.filter((q) => prefilled.has(q.field)).map((q) => (
+                  <Badge key={q.field} variant="secondary" className="text-[0.65rem]">
+                    {answers[q.field]}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {/* 답변 히스토리 */}
+            {answeredCount > 0 && (
               <div className="space-y-2">
-                {history.map((h, i) => (
+                {questions.filter((q) => answers[q.field] && !prefilled.has(q.field)).map((q, i) => (
                   <div
-                    key={i}
+                    key={q.field}
                     className="flex items-start gap-3 rounded-xl border border-border/40 bg-muted/30 p-3 text-sm"
                   >
                     <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[0.6rem] font-semibold text-primary">
                       {i + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs text-muted-foreground">{h.question}</div>
-                      <div className="mt-0.5 font-medium">{h.answer}</div>
+                      <div className="text-xs text-muted-foreground">{q.prompt}</div>
+                      <div className="mt-0.5 font-medium">{answers[q.field]}</div>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Loading state */}
-            {loading && !conflict && (
+            {/* 생성 중 */}
+            {loading && (
               <Card className="flex items-center gap-3 p-5">
                 <Loader2 className="size-5 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">AI가 응답을 준비하고 있습니다...</span>
+                <span className="text-sm text-muted-foreground">
+                  모든 정보가 모였습니다. 최종 프롬프트를 생성 중입니다...
+                </span>
               </Card>
             )}
 
-            {/* Conflict */}
-            {conflict && !loading && (
-              <Card className="overflow-hidden border-amber-500/30">
-                <div className="flex items-start gap-3 bg-amber-500/5 p-5">
-                  <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-500" />
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold">방향성 충돌이 감지되었습니다</div>
-                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-                      {conflict.description}
-                    </p>
-                    <p className="mt-3 mb-2 text-xs font-medium text-muted-foreground">
-                      어떤 방향을 우선하시겠습니까?
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {conflict.options.map((o) => (
-                        <Button
-                          key={o}
-                          variant="outline"
-                          className="h-9"
-                          onClick={() => resolveConflict(o)}
-                        >
-                          {o}
-                        </Button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </Card>
-            )}
-
-            {/* Question */}
-            {question && !loading && !conflict && (
+            {/* 현재 질문 */}
+            {current && !loading && (
               <Card className="overflow-hidden">
                 <div className="flex items-start gap-3 p-5">
                   <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
                     <Lightbulb className="size-5" />
                   </span>
                   <div className="flex-1">
-                    <div className="text-base font-semibold">{question.prompt}</div>
+                    <div className="text-base font-semibold">{current.prompt}</div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {question.options.map((o) => {
-                        const isAI = o === "AI에게 맡기기"
-                        const isCustom = o === "기타 직접 입력"
-                        if (isCustom) {
-                          return (
-                            <button
-                              key={o}
-                              onClick={() => setShowCustom((v) => !v)}
-                              className={cn(
-                                "flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-all",
-                                showCustom
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                              )}
-                            >
-                              <Pencil className="size-3.5" />
-                              {o}
-                            </button>
-                          )
-                        }
-                        return (
-                          <button
-                            key={o}
-                            onClick={() => answer(o)}
-                            className={cn(
-                              "flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-all",
-                              isAI
-                                ? "border-primary/30 bg-primary/5 text-primary hover:bg-primary/10"
-                                : "border-border/60 bg-background text-foreground hover:border-primary/30 hover:bg-accent/50"
-                            )}
-                          >
-                            {isAI && <Sparkles className="size-3.5" />}
-                            {o}
-                          </button>
-                        )
-                      })}
+                      {current.options.map((o) => (
+                        <button
+                          key={o}
+                          onClick={() => answer(o)}
+                          className="flex items-center gap-1.5 rounded-full border border-border/60 bg-background px-4 py-2 text-sm font-medium text-foreground transition-all hover:border-primary/30 hover:bg-accent/50"
+                        >
+                          {o}
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => answer("AI에게 맡기기")}
+                        className="flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-4 py-2 text-sm font-medium text-primary transition-all hover:bg-primary/10"
+                      >
+                        <Sparkles className="size-3.5" />
+                        AI에게 맡기기
+                      </button>
+                      <button
+                        onClick={() => setShowCustom((v) => !v)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-all",
+                          showCustom
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                        )}
+                      >
+                        <Pencil className="size-3.5" />
+                        기타 직접 입력
+                      </button>
                     </div>
 
                     <AnimatePresence>
@@ -454,32 +428,30 @@ export function MetaPromptView() {
               </Card>
             )}
 
-            {/* Manual generate button — appears after a few answers */}
-            {!loading && !conflict && history.length >= 3 && !generated && (
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4">
-                <div className="flex items-center gap-2 text-sm">
-                  <CheckCircle2 className="size-4 text-primary" />
-                  <span className="text-muted-foreground">
-                    충분한 정보가 모였습니다. 지금 바로 최종 프롬프트를 생성할 수 있어요.
-                  </span>
-                </div>
-                <Button size="sm" onClick={() => generate()} disabled={loading}>
-                  <Wand2 className="size-4" />
-                  지금 생성하기
+            {/* 하단 액션 */}
+            {!loading && (
+              <div className="flex items-center justify-between">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={goBack}
+                  disabled={answeredCount === 0}
+                  className="text-muted-foreground"
+                >
+                  <ArrowLeft className="size-4" /> 이전 질문
                 </Button>
+                {answeredCount >= Math.ceil(total * 0.5) && answeredCount < total && (
+                  <Button size="sm" variant="outline" onClick={() => generate()}>
+                    <Wand2 className="size-4" />
+                    남은 건 AI에게 맡기고 지금 생성
+                  </Button>
+                )}
               </div>
-            )}
-
-            {/* Done pending */}
-            {done && loading && !generated && (
-              <Card className="flex items-center gap-3 p-5">
-                <Loader2 className="size-5 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">최종 프롬프트를 생성 중입니다...</span>
-              </Card>
             )}
           </motion.div>
         )}
 
+        {/* ---------- 3단계: 결과 ---------- */}
         {phase === "result" && generated && (
           <motion.div
             key="result"
@@ -514,9 +486,12 @@ export function MetaPromptView() {
               </Button>
               <Button
                 variant="ghost"
-                onClick={() => setPhase("conversation")}
+                onClick={() => {
+                  setGenerated(null)
+                  setPhase("questions")
+                }}
               >
-                <ArrowLeft className="size-4" /> 대화로 돌아가기
+                <ArrowLeft className="size-4" /> 답변 수정하기
               </Button>
             </div>
           </motion.div>
@@ -526,19 +501,10 @@ export function MetaPromptView() {
   )
 }
 
-function Stepper({
-  phase,
-  completeness,
-  className,
-}: {
-  phase: Phase
-  completeness: number
-  className?: string
-}) {
+function Stepper({ phase, className }: { phase: Phase; className?: string }) {
   const steps = [
     { key: "select", label: "결과물 선택" },
-    { key: "input", label: "자료 분석" },
-    { key: "conversation", label: "요구사항 설계" },
+    { key: "questions", label: "필수 항목 선택" },
     { key: "result", label: "프롬프트 생성" },
   ]
   const activeIdx = steps.findIndex((s) => s.key === phase)
@@ -580,15 +546,6 @@ function Stepper({
           </div>
         ))}
       </div>
-      {phase === "conversation" && (
-        <div className="mt-4">
-          <div className="mb-1.5 flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">완성도</span>
-            <span className="font-semibold text-primary">{completeness}%</span>
-          </div>
-          <Progress value={completeness} className="h-1.5" />
-        </div>
-      )}
     </div>
   )
 }

@@ -58,14 +58,18 @@ function createCollectionHandle(collectionName: string) {
     ) {
       let q: Query = col()
 
-      // WHERE
+      // WHERE (equality only)
       if (opts.where) {
         for (const [field, value] of Object.entries(opts.where)) {
           q = q.where(field, "==", value)
         }
       }
 
-      // ORDER BY — use only the first field to avoid compound-index requirements
+      const snap = await q.get()
+      let rows = snap.docs.map(normalizeDoc).filter(Boolean) as Record<string, any>[]
+
+      // ORDER BY — sort in memory to avoid Firestore composite-index requirements.
+      // Collections are small, and this also supports proper multi-field ordering.
       const orderByArr = opts.orderBy
         ? Array.isArray(opts.orderBy)
           ? opts.orderBy
@@ -73,18 +77,34 @@ function createCollectionHandle(collectionName: string) {
         : []
 
       if (orderByArr.length > 0) {
-        const first = orderByArr[0]
-        const [field, dir] = Object.entries(first)[0]
-        q = q.orderBy(field, dir)
+        const keys = orderByArr.map((o) => Object.entries(o)[0] as [string, "asc" | "desc"])
+        rows = rows.sort((a, b) => {
+          for (const [field, dir] of keys) {
+            const av = a[field]
+            const bv = b[field]
+            if (av === bv) continue
+            let cmp: number
+            if (av instanceof Date && bv instanceof Date) {
+              cmp = av.getTime() - bv.getTime()
+            } else if (typeof av === "number" && typeof bv === "number") {
+              cmp = av - bv
+            } else if (typeof av === "boolean" && typeof bv === "boolean") {
+              cmp = (av ? 1 : 0) - (bv ? 1 : 0)
+            } else {
+              cmp = String(av ?? "").localeCompare(String(bv ?? ""))
+            }
+            if (cmp !== 0) return dir === "desc" ? -cmp : cmp
+          }
+          return 0
+        })
       }
 
       // TAKE (limit)
       if (opts.take) {
-        q = q.limit(opts.take)
+        rows = rows.slice(0, opts.take)
       }
 
-      const snap = await q.get()
-      return snap.docs.map(normalizeDoc).filter(Boolean) as Record<string, any>[]
+      return rows
     },
 
     /**
