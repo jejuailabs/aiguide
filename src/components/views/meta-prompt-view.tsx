@@ -4,7 +4,7 @@ import * as React from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wand2, ArrowLeft, Sparkles, Copy, Check, Loader2,
-  RefreshCw, Lightbulb, CheckCircle2, Pencil, ChevronDown, FileText,
+  RefreshCw, Lightbulb, CheckCircle2, Pencil, ChevronDown, FileText, Zap,
 } from "lucide-react"
 import { useFetch, useCopy } from "@/lib/hooks"
 import { Card } from "@/components/ui/card"
@@ -22,10 +22,25 @@ import { getQuestions, type BankQuestion } from "@/lib/meta-questions"
 
 type Phase = "select" | "questions" | "result"
 
-interface GeneratedPrompt {
-  model: string
+const MAX_QUESTIONS = 10
+
+interface Generated {
+  summary: string
   prompt: string
   note: string
+}
+
+interface HistoryItem {
+  field: string
+  question: string
+  options: string[]
+  answer: string
+}
+
+interface AutoNote {
+  field: string
+  value: string
+  reason: string
 }
 
 export function MetaPromptView() {
@@ -34,49 +49,43 @@ export function MetaPromptView() {
 
   const [phase, setPhase] = React.useState<Phase>("select")
   const [template, setTemplate] = React.useState<MetaTemplateDTO | null>(null)
-  const [questions, setQuestions] = React.useState<BankQuestion[]>([])
-  const [idx, setIdx] = React.useState(0)
-  const [answers, setAnswers] = React.useState<Record<string, string>>({})
-  const [prefilled, setPrefilled] = React.useState<Set<string>>(new Set())
+  const [bank, setBank] = React.useState<BankQuestion[]>([])
+  const [schema, setSchema] = React.useState<Record<string, string>>({})
+  const [history, setHistory] = React.useState<HistoryItem[]>([])
+  const [currentQ, setCurrentQ] = React.useState<BankQuestion | null>(null)
+  const [completeness, setCompleteness] = React.useState(0)
+  const [autoNotes, setAutoNotes] = React.useState<AutoNote[]>([])
   const [materials, setMaterials] = React.useState("")
   const [showMaterials, setShowMaterials] = React.useState(false)
   const [analyzing, setAnalyzing] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
+  const [loadingMsg, setLoadingMsg] = React.useState("")
   const [customInput, setCustomInput] = React.useState("")
   const [showCustom, setShowCustom] = React.useState(false)
-  const [generated, setGenerated] = React.useState<{
-    summary: string
-    prompts: GeneratedPrompt[]
-  } | null>(null)
+  const [generated, setGenerated] = React.useState<Generated | null>(null)
 
-  const total = questions.length
-  const answeredCount = questions.filter((q) => answers[q.field]).length
-  const completeness = total > 0 ? Math.round((answeredCount / total) * 100) : 0
-  const current = questions[idx] ?? null
+  const asked = history.length
+
+  // 자유 입력형 질문(선택지 없음)은 입력창을 자동으로 연다
+  React.useEffect(() => {
+    setShowCustom(currentQ ? currentQ.options.length === 0 : false)
+    setCustomInput("")
+  }, [currentQ])
 
   const reset = () => {
     setPhase("select")
     setTemplate(null)
-    setQuestions([])
-    setIdx(0)
-    setAnswers({})
-    setPrefilled(new Set())
+    setBank([])
+    setSchema({})
+    setHistory([])
+    setCurrentQ(null)
+    setCompleteness(0)
+    setAutoNotes([])
     setMaterials("")
     setShowMaterials(false)
     setCustomInput("")
     setShowCustom(false)
     setGenerated(null)
-  }
-
-  /** 다음 미응답 질문 인덱스를 찾는다. 없으면 -1 */
-  const nextUnanswered = (from: number, a: Record<string, string>) => {
-    for (let i = from; i < questions.length; i++) {
-      if (!a[questions[i].field]) return i
-    }
-    for (let i = 0; i < from; i++) {
-      if (!a[questions[i].field]) return i
-    }
-    return -1
   }
 
   const onSelectTemplate = (t: MetaTemplateDTO) => {
@@ -86,14 +95,102 @@ export function MetaPromptView() {
       fields = JSON.parse(t.schemaJson).fields ?? []
     } catch { /* noop */ }
     const qs = getQuestions(t.resultType, fields)
-    setQuestions(qs)
-    setIdx(0)
-    setAnswers({})
-    setPrefilled(new Set())
+    setBank(qs)
+    setSchema({})
+    setHistory([])
+    setAutoNotes([])
+    setCompleteness(0)
+    setCurrentQ(qs[0] ?? null)
     setPhase("questions")
   }
 
-  /** 참고자료 AI 분석 → 답변 자동 채움 */
+  /** next 액션 호출 — AI가 맥락 재검토 후 다음 질문/자동확정/완성도를 결정 */
+  const callNext = async (
+    t: MetaTemplateDTO,
+    mergedSchema: Record<string, string>,
+    hist: HistoryItem[],
+    lastAnswer: { field: string; value: string } | null
+  ) => {
+    setLoading(true)
+    setLoadingMsg("AI가 답변을 검토하고 다음 질문을 준비하고 있습니다...")
+    try {
+      const res = await fetch("/api/meta-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "next",
+          resultType: t.resultType,
+          resultLabel: t.label,
+          fields: bank.map((q) => q.field),
+          bank,
+          materials,
+          schema: mergedSchema,
+          history: hist.map((h) => ({ field: h.field, question: h.question, answer: h.answer })),
+          lastAnswer,
+          asked: hist.length,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "응답 실패")
+
+      const newSchema: Record<string, string> = data.schema ?? mergedSchema
+      setSchema(newSchema)
+      setCompleteness(data.completeness ?? 0)
+
+      const filled: AutoNote[] = data.autoFilled ?? []
+      if (filled.length > 0) {
+        setAutoNotes((prev) => {
+          const seen = new Set(prev.map((a) => a.field))
+          return [...prev, ...filled.filter((a) => !seen.has(a.field))]
+        })
+        toast.info(
+          `AI가 ${filled.length}개 항목을 자동 확정했습니다: ${filled.map((f) => f.value).join(", ")}`
+        )
+      }
+
+      if (data.done || !data.nextQuestion) {
+        await generate(newSchema, t)
+      } else {
+        setCurrentQ(data.nextQuestion)
+        setLoading(false)
+      }
+    } catch (e: any) {
+      // AI 검토 실패 시: 은행에서 다음 미응답 질문으로 폴백
+      const fallback = bank.find((q) => !mergedSchema[q.field])
+      if (fallback) {
+        setCurrentQ(fallback)
+        setLoading(false)
+        toast.error("AI 검토에 실패해 기본 질문으로 진행합니다.")
+      } else {
+        await generate(mergedSchema, t)
+      }
+    }
+  }
+
+  const answer = (value: string) => {
+    if (!currentQ || !template || loading) return
+    const item: HistoryItem = {
+      field: currentQ.field,
+      question: currentQ.prompt,
+      options: currentQ.options,
+      answer: value,
+    }
+    const hist = [...history, item]
+    const merged = { ...schema, [currentQ.field]: value }
+    setHistory(hist)
+    setSchema(merged)
+    setCurrentQ(null)
+    setCustomInput("")
+    setShowCustom(false)
+
+    if (hist.length >= MAX_QUESTIONS) {
+      generate(merged, template)
+    } else {
+      callNext(template, merged, hist, { field: item.field, value })
+    }
+  }
+
+  /** 참고자료 AI 분석 → 스키마 프리필 → AI가 첫 질문 결정 */
   const analyzeMaterials = async () => {
     if (!template || !materials.trim()) return
     setAnalyzing(true)
@@ -105,90 +202,69 @@ export function MetaPromptView() {
           action: "start",
           resultType: template.resultType,
           resultLabel: template.label,
-          fields: questions.map((q) => q.field),
+          fields: bank.map((q) => q.field),
           materials,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? "분석 실패")
-      const schema: Record<string, string> = data.schema ?? {}
-      const filled = new Set<string>()
-      const merged = { ...answers }
-      for (const q of questions) {
-        const v = (schema[q.field] ?? "").trim()
-        if (v && !merged[q.field]) {
-          merged[q.field] = v
-          filled.add(q.field)
-        }
+      const pre: Record<string, string> = {}
+      for (const [k, v] of Object.entries(data.schema ?? {})) {
+        if (typeof v === "string" && v.trim()) pre[k] = v.trim()
       }
-      setAnswers(merged)
-      setPrefilled(filled)
+      const merged = { ...schema, ...pre }
+      setSchema(merged)
       setShowMaterials(false)
-      if (filled.size > 0) {
-        toast.success(`참고자료 분석으로 ${filled.size}개 항목이 자동 완성되었습니다`)
-      } else {
-        toast.info("자동으로 채울 수 있는 항목을 찾지 못했습니다")
+      const count = Object.keys(pre).length
+      if (count > 0) {
+        toast.success(`참고자료 분석으로 ${count}개 항목이 자동 완성되었습니다`)
       }
-      const remain = questions.findIndex((q) => !merged[q.field])
-      if (remain === -1) {
-        generate(merged)
-      } else {
-        setIdx(remain)
-      }
-    } catch (e: any) {
-      toast.error(e.message ?? "참고자료 분석에 실패했습니다.")
-    } finally {
       setAnalyzing(false)
-    }
-  }
-
-  const answer = (value: string) => {
-    if (!current) return
-    const merged = { ...answers, [current.field]: value }
-    setAnswers(merged)
-    setCustomInput("")
-    setShowCustom(false)
-    const next = nextUnanswered(idx + 1, merged)
-    if (next === -1) {
-      generate(merged)
-    } else {
-      setIdx(next)
+      // AI가 프리필 반영해 첫 질문을 다시 결정
+      await callNext(template, merged, history, null)
+    } catch (e: any) {
+      setAnalyzing(false)
+      toast.error(e.message ?? "참고자료 분석에 실패했습니다.")
     }
   }
 
   const goBack = () => {
-    // 직전 답변한 질문으로 이동해 다시 선택할 수 있게
-    for (let i = idx - 1; i >= 0; i--) {
-      if (answers[questions[i].field]) {
-        const merged = { ...answers }
-        delete merged[questions[i].field]
-        setAnswers(merged)
-        setIdx(i)
-        return
-      }
-    }
+    if (history.length === 0 || loading) return
+    const hist = [...history]
+    const last = hist.pop()!
+    const merged = { ...schema }
+    delete merged[last.field]
+    setHistory(hist)
+    setSchema(merged)
+    setCurrentQ({ field: last.field, prompt: last.question, options: last.options })
   }
 
-  const generate = async (finalAnswers?: Record<string, string>) => {
-    if (!template) return
-    const schema = finalAnswers ?? answers
+  const generate = async (finalSchema?: Record<string, string>, t?: MetaTemplateDTO | null) => {
+    const tpl = t ?? template
+    if (!tpl) return
+    const s = finalSchema ?? schema
     setLoading(true)
+    setLoadingMsg("정보가 충분히 모였습니다. 최종 프롬프트를 생성 중입니다...")
     try {
       const res = await fetch("/api/meta-prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "generate",
-          resultType: template.resultType,
-          resultLabel: template.label,
-          fields: questions.map((q) => q.field),
+          resultType: tpl.resultType,
+          resultLabel: tpl.label,
+          fields: Object.keys(s),
           materials,
-          schema,
+          schema: s,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? "생성 실패")
-      setGenerated({ summary: data.summary ?? "", prompts: data.prompts ?? [] })
+      setGenerated({
+        summary: data.summary ?? "",
+        prompt: data.prompt ?? "",
+        note: data.note ?? "",
+      })
       setPhase("result")
     } catch (e: any) {
       toast.error(e.message ?? "프롬프트 생성에 실패했습니다.")
@@ -202,7 +278,7 @@ export function MetaPromptView() {
       <ViewHeader
         eyebrow="메타 프롬프트 엔지니어"
         title="가장 적은 질문으로 완성도 높은 프롬프트를"
-        desc="결과물을 선택하면 꼭 필요한 질문만 버튼으로 골라 답합니다. 10단계 안에 최적화된 프롬프트가 완성됩니다."
+        desc="결과물을 선택하면 AI가 답변을 하나하나 검토하며 다음 질문을 결정합니다. 불필요한 질문은 건너뛰고, 꼭 필요한 정보는 추가로 챙깁니다."
       />
 
       <Stepper phase={phase} className="mt-8" />
@@ -239,7 +315,7 @@ export function MetaPromptView() {
           </motion.div>
         )}
 
-        {/* ---------- 2단계: 객관식 질문 ---------- */}
+        {/* ---------- 2단계: AI 적응형 질문 ---------- */}
         {phase === "questions" && (
           <motion.div
             key="questions"
@@ -254,18 +330,19 @@ export function MetaPromptView() {
             <div className="rounded-2xl border border-border/60 bg-card p-4">
               <div className="mb-2 flex items-center justify-between text-sm">
                 <span className="font-semibold">
-                  질문 {Math.min(answeredCount + 1, total)} / {total}
+                  질문 {Math.min(asked + 1, MAX_QUESTIONS)}
+                  <span className="text-muted-foreground"> / 최대 {MAX_QUESTIONS}</span>
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  완성도 <span className="font-semibold text-primary">{completeness}%</span>
-                  {completeness >= 90 && " · 곧 생성됩니다"}
+                  AI 판단 완성도 <span className="font-semibold text-primary">{completeness}%</span>
+                  {completeness >= 80 && " · 거의 다 왔습니다"}
                 </span>
               </div>
               <Progress value={completeness} className="h-1.5" />
             </div>
 
-            {/* 참고자료 (선택) — AI가 분석해 답변 자동 채움 */}
-            {answeredCount === 0 && (
+            {/* 참고자료 (선택) */}
+            {asked === 0 && !loading && (
               <div className="rounded-2xl border border-dashed border-border/60">
                 <button
                   onClick={() => setShowMaterials((v) => !v)}
@@ -310,60 +387,66 @@ export function MetaPromptView() {
               </div>
             )}
 
-            {/* 자동 완성된 항목 요약 */}
-            {prefilled.size > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5 text-xs">
-                <Sparkles className="size-3.5 text-primary" />
-                <span className="text-muted-foreground">자동 완성:</span>
-                {questions.filter((q) => prefilled.has(q.field)).map((q) => (
-                  <Badge key={q.field} variant="secondary" className="text-[0.65rem]">
-                    {answers[q.field]}
-                  </Badge>
-                ))}
+            {/* AI 자동 확정 항목 */}
+            {autoNotes.length > 0 && (
+              <div className="space-y-1.5 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                  <Zap className="size-3.5" />
+                  AI가 맥락을 읽고 자동 확정한 항목
+                </div>
+                <div className="space-y-1">
+                  {autoNotes.map((a) => (
+                    <div key={a.field} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                      <Check className="mt-0.5 size-3 shrink-0 text-primary/70" />
+                      <span>
+                        <span className="font-medium text-foreground">{a.value}</span>
+                        {a.reason && <span> — {a.reason}</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
             {/* 답변 히스토리 */}
-            {answeredCount > 0 && (
+            {history.length > 0 && (
               <div className="space-y-2">
-                {questions.filter((q) => answers[q.field] && !prefilled.has(q.field)).map((q, i) => (
+                {history.map((h, i) => (
                   <div
-                    key={q.field}
+                    key={`${h.field}-${i}`}
                     className="flex items-start gap-3 rounded-xl border border-border/40 bg-muted/30 p-3 text-sm"
                   >
                     <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[0.6rem] font-semibold text-primary">
                       {i + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-xs text-muted-foreground">{q.prompt}</div>
-                      <div className="mt-0.5 font-medium">{answers[q.field]}</div>
+                      <div className="text-xs text-muted-foreground">{h.question}</div>
+                      <div className="mt-0.5 font-medium">{h.answer}</div>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* 생성 중 */}
+            {/* 로딩 (AI 검토 / 생성) */}
             {loading && (
               <Card className="flex items-center gap-3 p-5">
                 <Loader2 className="size-5 animate-spin text-primary" />
-                <span className="text-sm text-muted-foreground">
-                  모든 정보가 모였습니다. 최종 프롬프트를 생성 중입니다...
-                </span>
+                <span className="text-sm text-muted-foreground">{loadingMsg}</span>
               </Card>
             )}
 
             {/* 현재 질문 */}
-            {current && !loading && (
+            {currentQ && !loading && (
               <Card className="overflow-hidden">
                 <div className="flex items-start gap-3 p-5">
                   <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/15">
                     <Lightbulb className="size-5" />
                   </span>
                   <div className="flex-1">
-                    <div className="text-base font-semibold">{current.prompt}</div>
+                    <div className="text-base font-semibold">{currentQ.prompt}</div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {current.options.map((o) => (
+                      {currentQ.options.map((o) => (
                         <button
                           key={o}
                           onClick={() => answer(o)}
@@ -379,18 +462,20 @@ export function MetaPromptView() {
                         <Sparkles className="size-3.5" />
                         AI에게 맡기기
                       </button>
-                      <button
-                        onClick={() => setShowCustom((v) => !v)}
-                        className={cn(
-                          "flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-all",
-                          showCustom
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
-                        )}
-                      >
-                        <Pencil className="size-3.5" />
-                        기타 직접 입력
-                      </button>
+                      {currentQ.options.length > 0 && (
+                        <button
+                          onClick={() => setShowCustom((v) => !v)}
+                          className={cn(
+                            "flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-medium transition-all",
+                            showCustom
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                          )}
+                        >
+                          <Pencil className="size-3.5" />
+                          기타 직접 입력
+                        </button>
+                      )}
                     </div>
 
                     <AnimatePresence>
@@ -405,8 +490,9 @@ export function MetaPromptView() {
                             <Input
                               value={customInput}
                               onChange={(e) => setCustomInput(e.target.value)}
-                              placeholder="직접 입력하세요"
+                              placeholder={currentQ.options.length === 0 ? "내용을 입력하세요" : "직접 입력하세요"}
                               className="h-10"
+                              autoFocus={currentQ.options.length === 0}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" && customInput.trim()) {
                                   answer(customInput.trim())
@@ -435,12 +521,12 @@ export function MetaPromptView() {
                   variant="ghost"
                   size="sm"
                   onClick={goBack}
-                  disabled={answeredCount === 0}
+                  disabled={asked === 0}
                   className="text-muted-foreground"
                 >
                   <ArrowLeft className="size-4" /> 이전 질문
                 </Button>
-                {answeredCount >= Math.ceil(total * 0.5) && answeredCount < total && (
+                {asked >= 3 && (
                   <Button size="sm" variant="outline" onClick={() => generate()}>
                     <Wand2 className="size-4" />
                     남은 건 AI에게 맡기고 지금 생성
@@ -474,11 +560,7 @@ export function MetaPromptView() {
               </div>
             </Card>
 
-            <div className="space-y-3">
-              {generated.prompts.map((p, i) => (
-                <ResultCard key={i} item={p} />
-              ))}
-            </div>
+            <ResultCard item={generated} />
 
             <div className="flex flex-wrap gap-2 pt-2">
               <Button variant="outline" onClick={reset}>
@@ -489,6 +571,10 @@ export function MetaPromptView() {
                 onClick={() => {
                   setGenerated(null)
                   setPhase("questions")
+                  if (!currentQ) {
+                    const fallback = bank.find((q) => !schema[q.field])
+                    if (fallback) setCurrentQ(fallback)
+                  }
                 }}
               >
                 <ArrowLeft className="size-4" /> 답변 수정하기
@@ -504,7 +590,7 @@ export function MetaPromptView() {
 function Stepper({ phase, className }: { phase: Phase; className?: string }) {
   const steps = [
     { key: "select", label: "결과물 선택" },
-    { key: "questions", label: "필수 항목 선택" },
+    { key: "questions", label: "AI 맞춤 질문" },
     { key: "result", label: "프롬프트 생성" },
   ]
   const activeIdx = steps.findIndex((s) => s.key === phase)
@@ -575,7 +661,7 @@ function SelectedTypeChip({
   )
 }
 
-function ResultCard({ item }: { item: GeneratedPrompt }) {
+function ResultCard({ item }: { item: Generated }) {
   const { copied, copy } = useCopy()
   return (
     <Card className="overflow-hidden p-0">
@@ -584,20 +670,20 @@ function ResultCard({ item }: { item: GeneratedPrompt }) {
           <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <Sparkles className="size-3.5" />
           </span>
-          <span className="font-serif text-base font-semibold">{item.model}</span>
+          <span className="font-serif text-base font-semibold">완성된 프롬프트</span>
         </div>
         <Button
           size="sm"
           variant="ghost"
           className="h-8 gap-1.5"
-          onClick={() => copy(item.prompt, `${item.model} 프롬프트가 복사되었습니다`)}
+          onClick={() => copy(item.prompt, "프롬프트가 복사되었습니다")}
         >
           {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           {copied ? "복사됨" : "복사"}
         </Button>
       </div>
       <div className="p-5">
-        <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-xl bg-muted/40 p-4 text-xs leading-relaxed scrollbar-thin">
+        <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-xl bg-muted/40 p-4 text-sm leading-relaxed scrollbar-thin">
           {item.prompt}
         </pre>
         {item.note && (
