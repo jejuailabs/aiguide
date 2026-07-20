@@ -1,14 +1,18 @@
 "use client"
 
 import { create } from "zustand"
+import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged } from "firebase/auth"
+import { auth, googleProvider } from "./firebase-client"
 
 export type Tier = "guest" | "free" | "premium" | "admin"
+
+const ADMIN_EMAILS = ["naggu1999@gmail.com"]
 
 export interface User {
   id: string
   name: string
   email: string
-  avatar: string // initials
+  avatar: string
   tier: Tier
   provider: "google" | "guest"
   joinedAt: string
@@ -18,7 +22,7 @@ interface AuthState {
   user: User | null
   hydrated: boolean
   hydrate: () => void
-  loginWithGoogle: (asAdmin?: boolean) => Promise<User>
+  loginWithGoogle: () => Promise<User>
   loginAsGuest: () => void
   logout: () => void
   upgrade: () => void
@@ -26,24 +30,8 @@ interface AuthState {
 
 const KEY = "ai-guide-auth"
 
-const DEMO_FREE: User = {
-  id: "demo-free",
-  name: "김가이드",
-  email: "guide.kim@gmail.com",
-  avatar: "김",
-  tier: "free",
-  provider: "google",
-  joinedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 32).toISOString(),
-}
-
-const DEMO_ADMIN: User = {
-  id: "demo-admin",
-  name: "관리자",
-  email: "admin@ai-guide.portal",
-  avatar: "관",
-  tier: "admin",
-  provider: "google",
-  joinedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 120).toISOString(),
+function tierForEmail(email: string): Tier {
+  return ADMIN_EMAILS.includes(email.toLowerCase()) ? "admin" : "free"
 }
 
 export const useAuth = create<AuthState>((set, get) => ({
@@ -60,16 +48,38 @@ export const useAuth = create<AuthState>((set, get) => ({
       }
     } catch {}
     set({ hydrated: true })
+
+    onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser && !get().user) {
+        const u: User = {
+          id: fbUser.uid,
+          name: fbUser.displayName || fbUser.email?.split("@")[0] || "사용자",
+          email: fbUser.email || "",
+          avatar: (fbUser.displayName || "U").charAt(0),
+          tier: tierForEmail(fbUser.email || ""),
+          provider: "google",
+          joinedAt: new Date().toISOString(),
+        }
+        try { localStorage.setItem(KEY, JSON.stringify(u)) } catch {}
+        set({ user: u })
+      }
+    })
   },
-  loginWithGoogle: (asAdmin = false) => {
-    // Simulated OAuth handshake — real Google OAuth requires credentials
-    // not available in this sandbox. UX is faithful to the real flow.
-    const user = asAdmin ? DEMO_ADMIN : DEMO_FREE
-    try {
-      localStorage.setItem(KEY, JSON.stringify(user))
-    } catch {}
+  loginWithGoogle: async () => {
+    const result = await signInWithPopup(auth, googleProvider)
+    const fb = result.user
+    const user: User = {
+      id: fb.uid,
+      name: fb.displayName || fb.email?.split("@")[0] || "사용자",
+      email: fb.email || "",
+      avatar: (fb.displayName || "U").charAt(0),
+      tier: tierForEmail(fb.email || ""),
+      provider: "google",
+      joinedAt: new Date().toISOString(),
+    }
+    try { localStorage.setItem(KEY, JSON.stringify(user)) } catch {}
     set({ user })
-    return Promise.resolve(user)
+    return user
   },
   loginAsGuest: () => {
     const guest: User = {
@@ -81,24 +91,19 @@ export const useAuth = create<AuthState>((set, get) => ({
       provider: "guest",
       joinedAt: new Date().toISOString(),
     }
-    try {
-      localStorage.setItem(KEY, JSON.stringify(guest))
-    } catch {}
+    try { localStorage.setItem(KEY, JSON.stringify(guest)) } catch {}
     set({ user: guest })
   },
-  logout: () => {
-    try {
-      localStorage.removeItem(KEY)
-    } catch {}
+  logout: async () => {
+    try { await fbSignOut(auth) } catch {}
+    try { localStorage.removeItem(KEY) } catch {}
     set({ user: null })
   },
   upgrade: () => {
     const u = get().user
     if (!u) return
     const next = { ...u, tier: "premium" as Tier }
-    try {
-      localStorage.setItem(KEY, JSON.stringify(next))
-    } catch {}
+    try { localStorage.setItem(KEY, JSON.stringify(next)) } catch {}
     set({ user: next })
   },
 }))

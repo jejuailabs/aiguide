@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Loader2, Shield, Sparkles, Check } from "lucide-react"
+import { Loader2, Sparkles, Check, AlertCircle } from "lucide-react"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog"
@@ -10,7 +10,7 @@ import { useAuth } from "@/lib/auth"
 import { useNav } from "@/lib/store"
 import { toast } from "sonner"
 
-type Stage = "idle" | "google-loading" | "account-pick" | "completing"
+type Stage = "idle" | "loading" | "done" | "error"
 
 export function LoginModal({
   open,
@@ -22,25 +22,32 @@ export function LoginModal({
   const { loginWithGoogle, loginAsGuest } = useAuth()
   const { go } = useNav()
   const [stage, setStage] = React.useState<Stage>("idle")
+  const [errorMsg, setErrorMsg] = React.useState("")
 
-  const reset = () => setStage("idle")
+  const reset = () => { setStage("idle"); setErrorMsg("") }
 
-  const handleGoogle = () => {
-    setStage("google-loading")
-    setTimeout(() => setStage("account-pick"), 1400)
-  }
-
-  const pickAccount = (asAdmin: boolean) => {
-    setStage("completing")
-    setTimeout(async () => {
-      const user = await loginWithGoogle(asAdmin)
-      setStage("idle")
-      onOpenChange(false)
-      toast.success(`${user.name}님, 환영합니다`, {
-        description: asAdmin ? "관리자 권한으로 로그인되었습니다." : undefined,
-      })
-      if (asAdmin) go("admin")
-    }, 900)
+  const handleGoogle = async () => {
+    setStage("loading")
+    try {
+      const user = await loginWithGoogle()
+      setStage("done")
+      setTimeout(() => {
+        onOpenChange(false)
+        setStage("idle")
+        toast.success(`${user.name}님, 환영합니다`, {
+          description: user.tier === "admin" ? "관리자 권한으로 로그인되었습니다." : undefined,
+        })
+        if (user.tier === "admin") go("admin")
+      }, 800)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "로그인 실패"
+      if (msg.includes("popup-closed") || msg.includes("cancelled")) {
+        setStage("idle")
+        return
+      }
+      setErrorMsg(msg)
+      setStage("error")
+    }
   }
 
   const handleGuest = () => {
@@ -93,7 +100,7 @@ export function LoginModal({
                   className="group flex w-full items-center justify-center gap-3 rounded-xl border border-border/70 bg-background px-4 py-3 text-sm font-medium shadow-sm transition-all hover:bg-accent/40 hover:shadow-md"
                 >
                   <GoogleLogo className="size-5" />
-                  Google로 계속하기
+                  Google 계정으로 로그인
                 </button>
 
                 <div className="flex items-center gap-3 py-1">
@@ -109,80 +116,29 @@ export function LoginModal({
                   게스트로 둘러보기
                 </button>
 
-                <button
-                  onClick={() => pickAccount(true)}
-                  className="group flex w-full items-center gap-3 rounded-xl border border-dashed border-amber-500/30 bg-amber-500/[0.03] px-4 py-3 text-left transition-all hover:border-amber-500/50 hover:bg-amber-500/[0.06]"
-                >
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                    <Shield className="size-4" />
-                  </span>
-                  <span className="flex-1">
-                    <span className="block text-sm font-medium">관리자 데모로 체험</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Admin 대시보드와 콘텐츠 관리를 둘러봅니다
-                    </span>
-                  </span>
-                </button>
-
                 <p className="pt-2 text-center text-[0.68rem] leading-relaxed text-muted-foreground/70">
                   로그인 시 서비스 이용약관 및 개인정보처리방침에 동의합니다.
-                  <br />
-                  이 데모에서는 실제 Google 인증 대신 시뮬레이션이 제공됩니다.
                 </p>
               </motion.div>
             )}
 
-            {stage === "google-loading" && (
+            {stage === "loading" && (
               <motion.div
-                key="g-load"
+                key="loading"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 className="flex flex-col items-center justify-center py-8 text-center"
               >
                 <Loader2 className="size-7 animate-spin text-primary" />
-                <p className="mt-4 text-sm font-medium">Google 로그인 창을 여는 중…</p>
-                <p className="mt-1 text-xs text-muted-foreground">안전하게 인증 처리 중입니다</p>
+                <p className="mt-4 text-sm font-medium">Google 로그인 중…</p>
+                <p className="mt-1 text-xs text-muted-foreground">팝업 창에서 계정을 선택해주세요</p>
               </motion.div>
             )}
 
-            {stage === "account-pick" && (
+            {stage === "done" && (
               <motion.div
-                key="pick"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="space-y-2"
-              >
-                <p className="mb-3 text-center text-sm font-medium">계정 선택</p>
-                <p className="mb-4 text-center text-xs text-muted-foreground">
-                  Google 계정으로 AI Guide Portal 계속하기
-                </p>
-                <AccountRow
-                  avatar="김"
-                  name="김가이드"
-                  email="guide.kim@gmail.com"
-                  onClick={() => pickAccount(false)}
-                />
-                <AccountRow
-                  avatar="관"
-                  name="관리자"
-                  email="admin@ai-guide.portal"
-                  badge="Admin"
-                  onClick={() => pickAccount(true)}
-                />
-                <button
-                  onClick={() => setStage("idle")}
-                  className="mt-2 w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  다른 계정 사용하기
-                </button>
-              </motion.div>
-            )}
-
-            {stage === "completing" && (
-              <motion.div
-                key="comp"
+                key="done"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
@@ -195,50 +151,35 @@ export function LoginModal({
                 >
                   <Check className="size-6" />
                 </motion.span>
-                <p className="mt-4 text-sm font-medium">로그인 완료 중…</p>
-                <p className="mt-1 text-xs text-muted-foreground">잠시만 기다려주세요</p>
+                <p className="mt-4 text-sm font-medium">로그인 완료!</p>
+              </motion.div>
+            )}
+
+            {stage === "error" && (
+              <motion.div
+                key="error"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-col items-center justify-center gap-4 py-8 text-center"
+              >
+                <AlertCircle className="size-8 text-destructive" />
+                <div>
+                  <p className="text-sm font-medium">로그인에 실패했습니다</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{errorMsg}</p>
+                </div>
+                <button
+                  onClick={reset}
+                  className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  다시 시도
+                </button>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function AccountRow({
-  avatar,
-  name,
-  email,
-  badge,
-  onClick,
-}: {
-  avatar: string
-  name: string
-  email: string
-  badge?: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-xl border border-border/60 bg-background px-3 py-3 text-left transition-all hover:border-primary/30 hover:bg-accent/40"
-    >
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/25 to-primary/5 text-sm font-semibold ring-1 ring-primary/15">
-        {avatar}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5">
-          <span className="truncate text-sm font-medium">{name}</span>
-          {badge && (
-            <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.6rem] font-semibold text-amber-600 dark:text-amber-400">
-              {badge}
-            </span>
-          )}
-        </span>
-        <span className="block truncate text-xs text-muted-foreground">{email}</span>
-      </span>
-    </button>
   )
 }
 
