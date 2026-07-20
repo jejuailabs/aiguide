@@ -4,9 +4,9 @@ import * as React from "react"
 import { motion } from "framer-motion"
 import {
   Search, Copy, Heart, ExternalLink, Filter, Flame, Sparkles, Tag,
+  Plus, Pencil, Trash2, X,
 } from "lucide-react"
 import { useFetch, useCopy } from "@/lib/hooks"
-import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -15,9 +15,26 @@ import {
 } from "@/components/ui/dialog"
 import { ViewHeader } from "@/components/views/view-header"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/lib/auth"
+import { toast } from "sonner"
 import type { PromptDTO } from "@/lib/types"
 
 const CATEGORIES = ["전체", "이미지", "영상", "문서", "코드", "카피", "마케팅"]
+
+interface PromptForm {
+  title: string
+  description: string
+  body: string
+  category: string
+  bestModel: string
+  tags: string
+  runUrl: string
+}
+
+const EMPTY_FORM: PromptForm = {
+  title: "", description: "", body: "", category: "이미지",
+  bestModel: "GPT-4o", tags: "", runUrl: "",
+}
 
 export function PromptsView() {
   const [category, setCategory] = React.useState("전체")
@@ -25,9 +42,17 @@ export function PromptsView() {
   const [activeTag, setActiveTag] = React.useState<string | null>(null)
   const [favOnly, setFavOnly] = React.useState(false)
   const [selected, setSelected] = React.useState<PromptDTO | null>(null)
+  const [refreshKey, setRefreshKey] = React.useState(0)
+
+  const [writeOpen, setWriteOpen] = React.useState(false)
+  const [editTarget, setEditTarget] = React.useState<PromptDTO | null>(null)
+
+  const { user } = useAuth()
+  const isAdmin = user?.tier === "admin"
 
   const { data, loading } = useFetch<{ prompts: PromptDTO[] }>(
-    `/api/prompts?category=${encodeURIComponent(category)}`
+    `/api/prompts?category=${encodeURIComponent(category)}`,
+    { deps: [refreshKey] },
   )
   const favorites = useFavorites()
 
@@ -54,6 +79,24 @@ export function PromptsView() {
     if (favOnly) list = list.filter((p) => favorites.has(p.id))
     return list
   }, [prompts, query, activeTag, favOnly, favorites])
+
+  const refresh = () => setRefreshKey((k) => k + 1)
+
+  const handleDelete = async (p: PromptDTO) => {
+    if (!confirm(`"${p.title}" 프롬프트를 삭제하시겠습니까?`)) return
+    const r = await fetch(`/api/prompts/${p.id}`, { method: "DELETE" })
+    if (r.ok) {
+      toast.success("삭제되었습니다")
+      refresh()
+    } else {
+      toast.error("삭제 실패")
+    }
+  }
+
+  const handleEdit = (p: PromptDTO) => {
+    setEditTarget(p)
+    setWriteOpen(true)
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
@@ -83,6 +126,15 @@ export function PromptsView() {
             <Heart className={cn("size-4", favOnly && "fill-current")} />
             즐겨찾기 {favorites.size > 0 && `(${favorites.size})`}
           </Button>
+          {isAdmin && (
+            <Button
+              className="h-12 rounded-2xl px-5 gap-2"
+              onClick={() => { setEditTarget(null); setWriteOpen(true) }}
+            >
+              <Plus className="size-4" />
+              프롬프트 등록
+            </Button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -142,6 +194,9 @@ export function PromptsView() {
                 isFav={favorites.has(p.id)}
                 onToggleFav={() => favorites.toggle(p.id)}
                 onOpen={() => setSelected(p)}
+                isAdmin={isAdmin}
+                onEdit={() => handleEdit(p)}
+                onDelete={() => handleDelete(p)}
               />
             ))}
       </div>
@@ -161,6 +216,15 @@ export function PromptsView() {
         isFav={selected ? favorites.has(selected.id) : false}
         onToggleFav={() => selected && favorites.toggle(selected.id)}
       />
+
+      {isAdmin && (
+        <PromptWriteDialog
+          open={writeOpen}
+          onOpenChange={(o) => { setWriteOpen(o); if (!o) setEditTarget(null) }}
+          editTarget={editTarget}
+          onSuccess={refresh}
+        />
+      )}
     </div>
   )
 }
@@ -171,12 +235,18 @@ function PromptGridCard({
   isFav,
   onToggleFav,
   onOpen,
+  isAdmin,
+  onEdit,
+  onDelete,
 }: {
   prompt: PromptDTO
   index: number
   isFav: boolean
   onToggleFav: () => void
   onOpen: () => void
+  isAdmin: boolean
+  onEdit: () => void
+  onDelete: () => void
 }) {
   const { copy } = useCopy()
   return (
@@ -188,13 +258,33 @@ function PromptGridCard({
     >
       <div className="mb-3 flex items-center justify-between">
         <Badge variant="secondary" className="text-[0.65rem]">{prompt.category}</Badge>
-        <button
-          onClick={onToggleFav}
-          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
-          aria-label="즐겨찾기"
-        >
-          <Heart className={cn("size-4", isFav && "fill-primary text-primary")} />
-        </button>
+        <div className="flex items-center gap-1">
+          {isAdmin && (
+            <>
+              <button
+                onClick={onEdit}
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="수정"
+              >
+                <Pencil className="size-3.5" />
+              </button>
+              <button
+                onClick={onDelete}
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                aria-label="삭제"
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </>
+          )}
+          <button
+            onClick={onToggleFav}
+            className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-primary"
+            aria-label="즐겨찾기"
+          >
+            <Heart className={cn("size-4", isFav && "fill-primary text-primary")} />
+          </button>
+        </div>
       </div>
       <button onClick={onOpen} className="flex-1 text-left">
         <h3 className="font-serif text-lg font-semibold leading-snug tracking-tight">
@@ -328,7 +418,170 @@ function PromptDialog({
   )
 }
 
-/* Favorites hook (localStorage) */
+function PromptWriteDialog({
+  open,
+  onOpenChange,
+  editTarget,
+  onSuccess,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  editTarget: PromptDTO | null
+  onSuccess: () => void
+}) {
+  const isEdit = !!editTarget
+  const [form, setForm] = React.useState<PromptForm>(EMPTY_FORM)
+  const [saving, setSaving] = React.useState(false)
+
+  React.useEffect(() => {
+    if (editTarget) {
+      setForm({
+        title: editTarget.title,
+        description: editTarget.description,
+        body: editTarget.body,
+        category: editTarget.category,
+        bestModel: editTarget.bestModel,
+        tags: editTarget.tags.join(", "),
+        runUrl: editTarget.runUrl ?? "",
+      })
+    } else {
+      setForm(EMPTY_FORM)
+    }
+  }, [editTarget, open])
+
+  const set = (k: keyof PromptForm, v: string) => setForm((f) => ({ ...f, [k]: v }))
+
+  const handleSubmit = async () => {
+    if (!form.title.trim() || !form.body.trim()) {
+      toast.error("제목과 본문은 필수입니다")
+      return
+    }
+    setSaving(true)
+    const payload = {
+      title: form.title.trim(),
+      description: form.description.trim(),
+      body: form.body.trim(),
+      category: form.category,
+      bestModel: form.bestModel.trim(),
+      tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
+      runUrl: form.runUrl.trim() || null,
+    }
+
+    const url = isEdit ? `/api/prompts/${editTarget!.id}` : "/api/prompts"
+    const method = isEdit ? "PATCH" : "POST"
+
+    const r = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    setSaving(false)
+    if (r.ok) {
+      toast.success(isEdit ? "수정되었습니다" : "등록되었습니다")
+      onOpenChange(false)
+      onSuccess()
+    } else {
+      toast.error("저장에 실패했습니다")
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-serif text-xl">
+            {isEdit ? "프롬프트 수정" : "프롬프트 등록"}
+          </DialogTitle>
+          <DialogDescription>
+            {isEdit ? "프롬프트 정보를 수정합니다." : "새 프롬프트를 등록합니다."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="mt-4 space-y-4">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">제목 *</label>
+            <Input
+              value={form.title}
+              onChange={(e) => set("title", e.target.value)}
+              placeholder="프롬프트 제목"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">설명</label>
+            <Input
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              placeholder="간단한 설명"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">프롬프트 본문 *</label>
+            <textarea
+              value={form.body}
+              onChange={(e) => set("body", e.target.value)}
+              placeholder="프롬프트 전문을 입력하세요"
+              rows={8}
+              className="w-full rounded-xl border border-border bg-background px-4 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">카테고리</label>
+              <select
+                value={form.category}
+                onChange={(e) => set("category", e.target.value)}
+                className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                {CATEGORIES.filter((c) => c !== "전체").map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">최적 모델</label>
+              <Input
+                value={form.bestModel}
+                onChange={(e) => set("bestModel", e.target.value)}
+                placeholder="GPT-4o"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">태그 (쉼표 구분)</label>
+            <Input
+              value={form.tags}
+              onChange={(e) => set("tags", e.target.value)}
+              placeholder="마케팅, SNS, 카피"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">실행 URL (선택)</label>
+            <Input
+              value={form.runUrl}
+              onChange={(e) => set("runUrl", e.target.value)}
+              placeholder="https://chatgpt.com/..."
+            />
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            취소
+          </Button>
+          <Button onClick={handleSubmit} disabled={saving}>
+            {saving ? "저장 중…" : isEdit ? "수정 완료" : "등록"}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function useFavorites() {
   const [favs, setFavs] = React.useState<Set<string>>(new Set())
 
@@ -351,7 +604,6 @@ function useFavorites() {
     })
   }, [])
 
-  // force re-render consumer when favs change
   const [tick, setTick] = React.useState(0)
   React.useEffect(() => setTick((t) => t + 1), [favs])
 
