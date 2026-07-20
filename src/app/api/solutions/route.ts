@@ -33,3 +33,32 @@ export async function GET() {
   })
   return NextResponse.json({ solutions: solutions.map(mapSolution) })
 }
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json()
+    if (!body.title?.trim() || !body.url?.trim()) {
+      return NextResponse.json({ error: "제목과 URL은 필수입니다." }, { status: 400 })
+    }
+    const created = await db.vibeSolution.create({
+      data: {
+        title: body.title.trim(),
+        tagline: body.tagline?.trim() ?? "",
+        description: body.description?.trim() ?? "",
+        url: body.url.trim(),
+        thumbnail: body.thumbnail?.trim() || "/logo.svg",
+        features: JSON.stringify(Array.isArray(body.features) ? body.features : []),
+        purpose: body.purpose?.trim() ?? "",
+        category: body.category ?? "기타",
+        aiUsed: JSON.stringify(Array.isArray(body.aiUsed) ? body.aiUsed : []),
+        techStack: JSON.stringify(Array.isArray(body.techStack) ? body.techStack : []),
+        featured: !!body.featured,
+        order: typeof body.order === "number" ? body.order : 0,
+      },
+    })
+    return NextResponse.json({ solution: mapSolution(created) })
+  } catch (e: any) {
+    console.error("[solutions POST]", e)
+    return NextResponse.json({ error: "등록 실패" }, { status: 500 })
+  }
+}

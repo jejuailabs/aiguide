@@ -11,15 +11,18 @@ export async function PATCH(
     const { id } = await params
     const body = await req.json()
     const data: Record<string, any> = {}
-    for (const k of ["title", "content", "type"]) {
+    for (const k of ["name", "tagline", "description", "category", "icon", "price", "websiteUrl"]) {
       if (typeof body[k] === "string") data[k] = body[k].trim()
     }
-    if (typeof body.pinned === "boolean") data.pinned = body.pinned
+    if (Array.isArray(body.platforms)) data.platforms = JSON.stringify(body.platforms)
+    if (Array.isArray(body.useCases)) data.useCases = JSON.stringify(body.useCases)
+    if (typeof body.featured === "boolean") data.featured = body.featured
+    if (typeof body.order === "number") data.order = body.order
 
-    await db.announcement.update({ where: { id }, data })
+    await db.aITool.update({ where: { id }, data })
     return NextResponse.json({ ok: true })
   } catch (e: any) {
-    console.error("[announcements PATCH]", e)
+    console.error("[tools PATCH]", e)
     return NextResponse.json({ error: "수정 실패" }, { status: 500 })
   }
 }
@@ -30,9 +33,9 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params
-    await db.announcement.delete({ where: { id } })
+    await db.aITool.delete({ where: { id } })
     return NextResponse.json({ ok: true })
-  } catch (e: any) {
+  } catch {
     return NextResponse.json({ error: "삭제 실패" }, { status: 500 })
   }
 }

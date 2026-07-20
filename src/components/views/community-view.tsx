@@ -3,16 +3,19 @@
 import * as React from "react"
 import { motion } from "framer-motion"
 import {
-  Heart, MessageCircle, Pin, Sparkles, TrendingUp, Search, Plus,
+  Heart, MessageCircle, Pin, Sparkles, TrendingUp, Search, Plus, Loader2, Check,
 } from "lucide-react"
 import { useFetch, timeAgo } from "@/lib/hooks"
+import { useAuth } from "@/lib/auth"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog"
+import { LoginModal } from "@/components/auth/login-modal"
 import { ViewHeader } from "@/components/views/view-header"
 import { COMMUNITY_CATEGORY_LABELS, type CommunityPostDTO } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -32,12 +35,28 @@ export function CommunityView() {
   const [query, setQuery] = React.useState("")
   const [selected, setSelected] = React.useState<CommunityPostDTO | null>(null)
   const [liked, setLiked] = React.useState<Set<string>>(new Set())
+  const [writeOpen, setWriteOpen] = React.useState(false)
+  const [loginOpen, setLoginOpen] = React.useState(false)
+  const [localPosts, setLocalPosts] = React.useState<CommunityPostDTO[]>([])
+
+  const { user, hydrate } = useAuth()
+  React.useEffect(() => { hydrate() }, [hydrate])
 
   const { data, loading } = useFetch<{ posts: CommunityPostDTO[] }>(
     `/api/community?category=${encodeURIComponent(category)}`
   )
 
-  const posts = data?.posts ?? []
+  // 서버 데이터가 갱신되면 로컬 추가분 초기화
+  React.useEffect(() => { setLocalPosts([]) }, [data])
+
+  const posts = React.useMemo(() => {
+    const server = data?.posts ?? []
+    const visible = localPosts.filter(
+      (p) => category === "전체" || p.category === category
+    )
+    return [...visible, ...server]
+  }, [data, localPosts, category])
+
   const filtered = React.useMemo(() => {
     if (!query.trim()) return posts
     const q = query.toLowerCase()
@@ -45,6 +64,14 @@ export function CommunityView() {
       (p) => p.title.toLowerCase().includes(q) || p.content.toLowerCase().includes(q)
     )
   }, [posts, query])
+
+  const onWriteClick = () => {
+    if (!user || user.tier === "guest") {
+      setLoginOpen(true)
+      return
+    }
+    setWriteOpen(true)
+  }
 
   const toggleLike = (id: string) => {
     setLiked((prev) => {
@@ -74,7 +101,7 @@ export function CommunityView() {
             className="h-11 rounded-2xl pl-11"
           />
         </div>
-        <Button className="h-11 rounded-2xl" onClick={() => toast.info("게시글 작성은 곧 지원될 예정입니다")}>
+        <Button className="h-11 rounded-2xl" onClick={onWriteClick}>
           <Plus className="size-4" /> 글쓰기
         </Button>
       </div>
@@ -123,7 +150,137 @@ export function CommunityView() {
       )}
 
       <PostDialog post={selected} onClose={() => setSelected(null)} isLiked={selected ? liked.has(selected.id) : false} onLike={() => selected && toggleLike(selected.id)} />
+
+      <WriteDialog
+        open={writeOpen}
+        onOpenChange={setWriteOpen}
+        authorName={user?.name ?? ""}
+        defaultCategory={category === "전체" ? "question" : category}
+        onCreated={(post) => setLocalPosts((l) => [post, ...l])}
+      />
+
+      <LoginModal open={loginOpen} onOpenChange={setLoginOpen} />
     </div>
+  )
+}
+
+function WriteDialog({
+  open,
+  onOpenChange,
+  authorName,
+  defaultCategory,
+  onCreated,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  authorName: string
+  defaultCategory: string
+  onCreated: (post: CommunityPostDTO) => void
+}) {
+  const [form, setForm] = React.useState({ title: "", content: "", category: defaultCategory, tags: "" })
+  const [saving, setSaving] = React.useState(false)
+
+  React.useEffect(() => {
+    if (open) setForm((f) => ({ ...f, category: defaultCategory }))
+  }, [open, defaultCategory])
+
+  const submit = async () => {
+    if (!form.title.trim() || !form.content.trim()) {
+      toast.error("제목과 내용을 입력하세요")
+      return
+    }
+    setSaving(true)
+    try {
+      const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean)
+      const res = await fetch("/api/community", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: form.title,
+          content: form.content,
+          category: form.category,
+          tags,
+          author: authorName,
+          featured: false,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "등록 실패")
+      onCreated(data.post)
+      setForm({ title: "", content: "", category: defaultCategory, tags: "" })
+      onOpenChange(false)
+      toast.success("게시글이 등록되었습니다")
+    } catch (e: any) {
+      toast.error(e.message ?? "등록에 실패했습니다")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-serif text-xl">새 글 작성</DialogTitle>
+          <DialogDescription>
+            {authorName} 님의 이름으로 등록됩니다
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">카테고리</label>
+            <div className="flex flex-wrap gap-2">
+              {["question", "prompt-share", "use-case", "news"].map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setForm((f) => ({ ...f, category: c }))}
+                  className={cn(
+                    "rounded-full border px-3.5 py-1.5 text-sm font-medium transition-all",
+                    form.category === c
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border/60 bg-background text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                  )}
+                >
+                  {COMMUNITY_CATEGORY_LABELS[c]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">제목</label>
+            <Input
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              placeholder="제목을 입력하세요"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">내용</label>
+            <Textarea
+              value={form.content}
+              onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+              placeholder="내용을 입력하세요"
+              className="min-h-[140px] resize-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">태그 (쉼표로 구분)</label>
+            <Input
+              value={form.tags}
+              onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
+              placeholder="AI, 프롬프트, 팁"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>취소</Button>
+          <Button onClick={submit} disabled={saving}>
+            {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+            등록
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

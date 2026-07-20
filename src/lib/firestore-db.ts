@@ -124,6 +124,26 @@ function createCollectionHandle(collectionName: string) {
     },
 
     /**
+     * update({ where: { id }, data })
+     */
+    async update(opts: { where: { id: string }; data: Record<string, any> }) {
+      const ref = col().doc(opts.where.id)
+      const patch = { ...opts.data, updatedAt: new Date() }
+      await ref.update(patch)
+      const snap = await ref.get()
+      return normalizeDoc(snap) as Record<string, any>
+    },
+
+    /**
+     * findUnique({ where: { id } })
+     */
+    async findUnique(opts: { where: { id: string } }) {
+      const snap = await col().doc(opts.where.id).get()
+      if (!snap.exists) return null
+      return normalizeDoc(snap)
+    },
+
+    /**
      * delete({ where: { id } })
      */
     async delete(opts: { where: { id: string } }) {
