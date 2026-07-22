@@ -513,6 +513,30 @@ export function Thumb({
     music: "from-fuchsia-500/30 via-pink-500/10 to-transparent",
   }
   const grad = palettes[slug] ?? "from-primary/25 via-primary/5 to-transparent"
+  const isImage = typeof slug === "string" && /^(https?:\/\/|\/)/.test(slug) && slug !== "/logo.svg"
+
+  // 실제 썸네일 이미지(og:image 등)가 있으면 이미지로 렌더한다.
+  if (isImage) {
+    return (
+      <div className={cn("relative overflow-hidden bg-muted/40", className)}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={slug}
+          alt={title}
+          loading="lazy"
+          className="absolute inset-0 size-full object-cover"
+          onError={(e) => {
+            // 이미지 로드 실패 시 그라디언트 폴백으로 대체
+            const el = e.currentTarget
+            el.style.display = "none"
+            el.parentElement?.classList.add("thumb-fallback")
+          }}
+        />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-background/40 via-transparent to-transparent" />
+      </div>
+    )
+  }
+
   return (
     <div className={cn("relative overflow-hidden bg-muted/40", className)}>
       <div className={cn("absolute inset-0 bg-gradient-to-br", grad)} />
