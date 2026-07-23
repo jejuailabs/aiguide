@@ -63,6 +63,8 @@ export interface CommunityPostDTO {
   category: string
   author: string
   authorAvatar: string | null
+  /** 강의·모임 안내 글의 세로형 포스터 이미지 URL */
+  poster: string | null
   likes: number
   comments: number
   featured: boolean
@@ -92,4 +94,8 @@ export const COMMUNITY_CATEGORY_LABELS: Record<string, string> = {
   "prompt-share": "프롬프트 공유",
   "use-case": "활용 사례",
   news: "AI 뉴스",
+  event: "강의·모임",
 }
+
+/** 포스터 이미지가 필수인 카테고리 */
+export const POSTER_REQUIRED_CATEGORY = "event"

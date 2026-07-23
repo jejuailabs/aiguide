@@ -4,6 +4,7 @@ import * as React from "react"
 import { motion } from "framer-motion"
 import {
   Heart, MessageCircle, Pin, Sparkles, TrendingUp, Search, Plus, Loader2, Check,
+  CalendarDays, ImageIcon, Upload, X,
 } from "lucide-react"
 import { useFetch, timeAgo } from "@/lib/hooks"
 import { useAuth } from "@/lib/auth"
@@ -17,13 +18,17 @@ import {
 } from "@/components/ui/dialog"
 import { LoginModal } from "@/components/auth/login-modal"
 import { ViewHeader } from "@/components/views/view-header"
-import { COMMUNITY_CATEGORY_LABELS, type CommunityPostDTO } from "@/lib/types"
+import {
+  COMMUNITY_CATEGORY_LABELS, POSTER_REQUIRED_CATEGORY, type CommunityPostDTO,
+} from "@/lib/types"
+import { uploadPoster } from "@/lib/upload"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 
-const CATEGORY_ORDER = ["전체", "question", "prompt-share", "use-case", "news"] as const
+const CATEGORY_ORDER = ["전체", "event", "question", "prompt-share", "use-case", "news"] as const
 
 const CAT_STYLES: Record<string, string> = {
+  event: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
   question: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
   "prompt-share": "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
   "use-case": "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
@@ -46,6 +51,11 @@ export function CommunityView() {
     `/api/community?category=${encodeURIComponent(category)}`
   )
 
+  // 포스터 스트립은 카테고리 필터와 무관하게 항상 강의·모임 글을 보여준다
+  const { data: eventData } = useFetch<{ posts: CommunityPostDTO[] }>(
+    `/api/community?category=${POSTER_REQUIRED_CATEGORY}`
+  )
+
   // 서버 데이터가 갱신되면 로컬 추가분 초기화
   React.useEffect(() => { setLocalPosts([]) }, [data])
 
@@ -56,6 +66,13 @@ export function CommunityView() {
     )
     return [...visible, ...server]
   }, [data, localPosts, category])
+
+  // 포스터가 있는 강의·모임 글 (서버 + 방금 작성한 로컬 글)
+  const eventPosts = React.useMemo(() => {
+    const server = eventData?.posts ?? []
+    const local = localPosts.filter((p) => p.category === POSTER_REQUIRED_CATEGORY)
+    return [...local, ...server].filter((p) => !!p.poster)
+  }, [eventData, localPosts])
 
   const filtered = React.useMemo(() => {
     if (!query.trim()) return posts
@@ -89,6 +106,9 @@ export function CommunityView() {
         title="AI 지식을 함께 나누는 공간"
         desc="질문과 답변, 프롬프트 공유, AI 활용 사례, 최신 AI 뉴스까지. 서로의 경험으로 함께 성장합니다."
       />
+
+      {/* 강의·모임 포스터 (게시글 목록과 별개로 상단 노출) */}
+      <PosterStrip posts={eventPosts} onOpen={(p) => setSelected(p)} />
 
       {/* Controls */}
       <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -164,6 +184,57 @@ export function CommunityView() {
   )
 }
 
+/** 강의·모임 포스터 스트립 — 세로형 포스터를 한 줄에 5개씩 노출 */
+function PosterStrip({
+  posts,
+  onOpen,
+}: {
+  posts: CommunityPostDTO[]
+  onOpen: (p: CommunityPostDTO) => void
+}) {
+  if (posts.length === 0) return null
+
+  return (
+    <section className="mt-8">
+      <div className="mb-3 flex items-center gap-2">
+        <CalendarDays className="size-4 text-violet-500" />
+        <h2 className="font-serif text-lg font-semibold tracking-tight">강의 · 모임 안내</h2>
+        <Badge variant="secondary" className="text-[0.65rem]">{posts.length}</Badge>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        {posts.slice(0, 10).map((p, i) => (
+          <motion.button
+            key={p.id}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, delay: Math.min(i * 0.05, 0.3) }}
+            onClick={() => onOpen(p)}
+            className="group overflow-hidden rounded-xl border border-border/60 bg-card text-left transition-all hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5"
+          >
+            <div className="relative aspect-[3/4] w-full overflow-hidden bg-muted/40">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={p.poster!}
+                alt={p.title}
+                loading="lazy"
+                className="size-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+            </div>
+            <div className="p-2.5">
+              <h3 className="line-clamp-2 text-xs font-medium leading-snug transition-colors group-hover:text-primary">
+                {p.title}
+              </h3>
+              <p className="mt-1 text-[0.65rem] text-muted-foreground">{timeAgo(p.createdAt)}</p>
+            </div>
+          </motion.button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function WriteDialog({
   open,
   onOpenChange,
@@ -179,14 +250,38 @@ function WriteDialog({
 }) {
   const [form, setForm] = React.useState({ title: "", content: "", category: defaultCategory, tags: "" })
   const [saving, setSaving] = React.useState(false)
+  const [poster, setPoster] = React.useState("")
+  const [uploading, setUploading] = React.useState(false)
+  const fileRef = React.useRef<HTMLInputElement>(null)
+
+  const isEvent = form.category === POSTER_REQUIRED_CATEGORY
 
   React.useEffect(() => {
-    if (open) setForm((f) => ({ ...f, category: defaultCategory }))
+    if (open) { setForm((f) => ({ ...f, category: defaultCategory })); setPoster("") }
   }, [open, defaultCategory])
+
+  const pickFile = async (file: File | undefined) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const url = await uploadPoster(file)
+      setPoster(url)
+      toast.success("포스터가 업로드되었습니다")
+    } catch (e: any) {
+      toast.error(e?.message ?? "업로드 실패 · 이미지 URL을 직접 입력해 주세요")
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ""
+    }
+  }
 
   const submit = async () => {
     if (!form.title.trim() || !form.content.trim()) {
       toast.error("제목과 내용을 입력하세요")
+      return
+    }
+    if (isEvent && !poster.trim()) {
+      toast.error("강의·모임 안내는 포스터 이미지가 필수입니다")
       return
     }
     setSaving(true)
@@ -199,6 +294,7 @@ function WriteDialog({
           title: form.title,
           content: form.content,
           category: form.category,
+          poster: poster.trim() || null,
           tags,
           author: authorName,
           featured: false,
@@ -208,6 +304,7 @@ function WriteDialog({
       if (!res.ok) throw new Error(data.error ?? "등록 실패")
       onCreated(data.post)
       setForm({ title: "", content: "", category: defaultCategory, tags: "" })
+      setPoster("")
       onOpenChange(false)
       toast.success("게시글이 등록되었습니다")
     } catch (e: any) {
@@ -219,7 +316,7 @@ function WriteDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-serif text-xl">새 글 작성</DialogTitle>
           <DialogDescription>
@@ -230,7 +327,7 @@ function WriteDialog({
           <div>
             <label className="mb-1.5 block text-sm font-medium">카테고리</label>
             <div className="flex flex-wrap gap-2">
-              {["question", "prompt-share", "use-case", "news"].map((c) => (
+              {["event", "question", "prompt-share", "use-case", "news"].map((c) => (
                 <button
                   key={c}
                   onClick={() => setForm((f) => ({ ...f, category: c }))}
@@ -246,12 +343,71 @@ function WriteDialog({
               ))}
             </div>
           </div>
+          {/* 강의·모임은 세로형 포스터 필수 */}
+          {isEvent && (
+            <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 p-3.5">
+              <label className="mb-2 block text-sm font-medium">
+                포스터 <span className="text-violet-600 dark:text-violet-400">*필수</span>
+                <span className="ml-1 font-normal text-muted-foreground">(세로형 권장 · 3:4)</span>
+              </label>
+
+              <div className="flex gap-3">
+                <div className="relative aspect-[3/4] w-24 shrink-0 overflow-hidden rounded-lg border border-border/60 bg-muted/40">
+                  {poster ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={poster} alt="포스터 미리보기" className="size-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setPoster("")}
+                        className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground shadow backdrop-blur transition-colors hover:bg-background"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex size-full flex-col items-center justify-center gap-1 text-muted-foreground/60">
+                      {uploading ? <Loader2 className="size-5 animate-spin" /> : <ImageIcon className="size-5" />}
+                      <span className="text-[0.6rem]">{uploading ? "업로드 중" : "미리보기"}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-2">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => pickFile(e.target.files?.[0])}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full"
+                    disabled={uploading}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                    이미지 업로드
+                  </Button>
+                  <Input
+                    value={poster}
+                    onChange={(e) => setPoster(e.target.value)}
+                    placeholder="또는 이미지 URL 붙여넣기"
+                    className="text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="mb-1.5 block text-sm font-medium">제목</label>
             <Input
               value={form.title}
               onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-              placeholder="제목을 입력하세요"
+              placeholder={isEvent ? "예) 제주 AI 실전 워크샵 3기 모집" : "제목을 입력하세요"}
             />
           </div>
           <div>
@@ -399,6 +555,14 @@ function PostDialog({
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 p-6">
+              {post.poster && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={post.poster}
+                  alt={post.title}
+                  className="mx-auto max-h-[60vh] w-auto rounded-xl border border-border/60"
+                />
+              )}
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
                 {post.content}
               </p>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import type { CommunityPostDTO } from "@/lib/types"
+import { POSTER_REQUIRED_CATEGORY, type CommunityPostDTO } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
@@ -17,6 +17,7 @@ function mapPost(p: any): CommunityPostDTO {
     category: p.category,
     author: p.author,
     authorAvatar: p.authorAvatar,
+    poster: p.poster ?? null,
     likes: p.likes,
     comments: p.comments,
     featured: p.featured,
@@ -44,16 +45,24 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const body = await req.json()
-    const { title, content, category, author, tags, featured } = body
+    const { title, content, category, author, tags, featured, poster } = body
     if (!title || !content || !author) {
       return NextResponse.json({ error: "제목, 내용, 작성자는 필수입니다." }, { status: 400 })
+    }
+    const cat = category ?? "use-case"
+    if (cat === POSTER_REQUIRED_CATEGORY && !poster?.trim()) {
+      return NextResponse.json(
+        { error: "강의·모임 안내는 포스터 이미지가 필수입니다." },
+        { status: 400 }
+      )
     }
     const created = await db.communityPost.create({
       data: {
         title,
         content,
-        category: category ?? "use-case",
+        category: cat,
         author,
+        poster: poster?.trim() || null,
         tags: JSON.stringify(tags ?? []),
         featured: !!featured,
       },

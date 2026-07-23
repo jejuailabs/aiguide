@@ -11,7 +11,7 @@ export async function PATCH(
     const { id } = await params
     const body = await req.json()
     const data: Record<string, any> = {}
-    for (const k of ["title", "content", "category", "author"]) {
+    for (const k of ["title", "content", "category", "author", "poster"]) {
       if (typeof body[k] === "string") data[k] = body[k].trim()
     }
     if (Array.isArray(body.tags)) data.tags = JSON.stringify(body.tags)

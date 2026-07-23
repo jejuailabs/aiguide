@@ -542,20 +542,23 @@ function communityConfig(adminName: string): EntityConfig<CommunityPostDTO> {
       {
         key: "category", label: "카테고리", type: "select",
         options: [
+          { value: "event", label: "강의·모임" },
           { value: "question", label: "질문·답변" },
           { value: "prompt-share", label: "프롬프트 공유" },
           { value: "use-case", label: "활용 사례" },
           { value: "news", label: "AI 뉴스" },
         ],
       },
+      { key: "poster", label: "포스터 이미지 URL (강의·모임 필수)", type: "text", full: true, placeholder: "https://… (세로형 3:4)" },
       { key: "author", label: "작성자", type: "text", placeholder: "작성자명" },
       { key: "tags", label: "태그 (쉼표 구분)", type: "tags", full: true, placeholder: "AI, 프롬프트, 팁" },
       { key: "featured", label: "추천 게시글", type: "switch" },
     ],
-    emptyForm: { title: "", content: "", category: "use-case", author: adminName, tags: "", featured: false },
+    emptyForm: { title: "", content: "", category: "use-case", author: adminName, tags: "", featured: false, poster: "" },
     toForm: (p) => ({
       title: p.title, content: p.content, category: p.category,
       author: p.author, tags: p.tags.join(", "), featured: p.featured,
+      poster: p.poster ?? "",
     }),
     toRow: (p) => ({
       title: p.title,

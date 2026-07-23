@@ -48,6 +48,11 @@ function absolutize(src: string, base: string): string {
   }
 }
 
+/** 메인화면 캡쳐 URL (thum.io · 카드 비율 16:10에 맞춘 1200x750) */
+function screenshotUrl(pageUrl: string): string {
+  return `https://image.thum.io/get/width/1200/crop/750/${pageUrl}`
+}
+
 export async function POST(req: Request) {
   let target = ""
   try {
@@ -71,10 +76,16 @@ export async function POST(req: Request) {
     }).finally(() => clearTimeout(timeout))
 
     if (!res.ok) {
-      return NextResponse.json(
-        { error: `페이지를 불러오지 못했습니다 (HTTP ${res.status})` },
-        { status: 200, headers: { "x-partial": "1" } }
-      )
+      // 봇 차단 등으로 HTML은 못 읽어도 캡쳐는 쓸 수 있으므로 함께 돌려준다.
+      return NextResponse.json({
+        error: `정보를 읽지 못했습니다 (HTTP ${res.status}) · 캡쳐는 사용 가능합니다`,
+        url: target,
+        thumbnail: "",
+        screenshot: screenshotUrl(target),
+        title: "",
+        description: "",
+        siteName: "",
+      })
     }
 
     const finalUrl = res.url || target
@@ -97,6 +108,7 @@ export async function POST(req: Request) {
     return NextResponse.json({
       url: finalUrl,
       thumbnail: ogImage ? absolutize(ogImage, finalUrl) : "",
+      screenshot: screenshotUrl(finalUrl),
       title: decodeEntities(title),
       description: decodeEntities(description),
       siteName: decodeEntities(siteName),
@@ -104,9 +116,17 @@ export async function POST(req: Request) {
   } catch (e: any) {
     const aborted = e?.name === "AbortError"
     console.error("[metadata POST]", target, e?.message)
-    return NextResponse.json(
-      { error: aborted ? "요청 시간이 초과되었습니다." : "메타데이터를 가져오지 못했습니다.", url: target },
-      { status: 200 }
-    )
+    const valid = /^https?:\/\//i.test(target)
+    return NextResponse.json({
+      error: aborted
+        ? "요청 시간이 초과되었습니다 · 캡쳐는 사용 가능합니다"
+        : "정보를 가져오지 못했습니다 · 캡쳐는 사용 가능합니다",
+      url: target,
+      thumbnail: "",
+      screenshot: valid ? screenshotUrl(target) : "",
+      title: "",
+      description: "",
+      siteName: "",
+    })
   }
 }

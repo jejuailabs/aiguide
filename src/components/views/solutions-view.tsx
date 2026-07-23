@@ -117,6 +117,82 @@ export function SolutionsView() {
   )
 }
 
+/** 썸네일 후보 카드 — 클릭해서 선택. 로딩/실패 상태를 자체 처리한다. */
+function ThumbChoice({
+  label,
+  src,
+  selected,
+  onSelect,
+  emptyText,
+}: {
+  label: string
+  src: string
+  selected: boolean
+  onSelect: () => void
+  emptyText: string
+}) {
+  const [status, setStatus] = React.useState<"loading" | "ok" | "fail">(src ? "loading" : "fail")
+
+  React.useEffect(() => {
+    setStatus(src ? "loading" : "fail")
+  }, [src])
+
+  const usable = !!src && status !== "fail"
+
+  return (
+    <button
+      type="button"
+      onClick={() => usable && onSelect()}
+      disabled={!usable}
+      className={cn(
+        "group relative overflow-hidden rounded-xl border-2 text-left transition-all",
+        selected
+          ? "border-primary ring-2 ring-primary/20"
+          : usable
+            ? "border-border/60 hover:border-primary/40"
+            : "cursor-not-allowed border-border/40 opacity-60"
+      )}
+    >
+      <div className="relative aspect-[16/10] w-full bg-muted/40">
+        {src && status !== "fail" && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={label}
+            className="size-full object-cover object-top"
+            onLoad={() => setStatus("ok")}
+            onError={() => setStatus("fail")}
+          />
+        )}
+        {status === "loading" && (
+          <div className="absolute inset-0 flex items-center justify-center bg-muted/60">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+        {status === "fail" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-muted-foreground/60">
+            <ImageIcon className="size-5" />
+            <span className="text-[0.65rem]">{emptyText}</span>
+          </div>
+        )}
+        {selected && (
+          <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow">
+            <Check className="size-3" />
+          </span>
+        )}
+      </div>
+      <div
+        className={cn(
+          "px-2 py-1.5 text-center text-[0.7rem] font-medium",
+          selected ? "bg-primary/10 text-primary" : "text-muted-foreground"
+        )}
+      >
+        {label}
+      </div>
+    </button>
+  )
+}
+
 function SubmitDialog({
   open,
   onOpenChange,
@@ -138,15 +214,18 @@ function SubmitDialog({
   const [fetching, setFetching] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [fetched, setFetched] = React.useState(false)
+  // 썸네일 후보: og:image와 메인화면 캡쳐 중 선택
+  const [ogImage, setOgImage] = React.useState("")
+  const [shot, setShot] = React.useState("")
 
   React.useEffect(() => {
-    if (open) { setForm(empty); setFetched(false) }
+    if (open) { setForm(empty); setFetched(false); setOgImage(""); setShot("") }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }))
 
-  // URL에서 썸네일/제목/설명 자동 추출
+  // URL에서 썸네일 후보(og:image·메인화면 캡쳐)와 제목/설명 자동 추출
   const grab = async () => {
     if (!form.url.trim()) { toast.error("웹사이트 주소를 입력하세요"); return }
     setFetching(true)
@@ -157,19 +236,21 @@ function SubmitDialog({
         body: JSON.stringify({ url: form.url }),
       })
       const data = await res.json()
-      if (data.error && !data.title && !data.thumbnail) {
-        toast.error(data.error)
-      } else {
-        setForm((f) => ({
-          ...f,
-          url: data.url || f.url,
-          thumbnail: data.thumbnail || f.thumbnail,
-          title: f.title || data.title || data.siteName || "",
-          tagline: f.tagline || data.description || "",
-        }))
-        setFetched(true)
-        toast.success(data.thumbnail ? "썸네일과 정보를 가져왔습니다" : "정보를 가져왔습니다 (썸네일 없음)")
-      }
+
+      setOgImage(data.thumbnail || "")
+      setShot(data.screenshot || "")
+      setForm((f) => ({
+        ...f,
+        url: data.url || f.url,
+        // og:image가 있으면 우선 선택, 없으면 캡쳐를 기본 선택
+        thumbnail: data.thumbnail || data.screenshot || f.thumbnail,
+        title: f.title || data.title || data.siteName || "",
+        tagline: f.tagline || data.description || "",
+      }))
+      setFetched(true)
+
+      if (data.error) toast.warning(data.error)
+      else toast.success(data.thumbnail ? "정보와 썸네일 후보를 가져왔습니다" : "정보를 가져왔습니다 · 캡쳐를 썸네일로 사용합니다")
     } catch {
       toast.error("정보를 가져오지 못했습니다. 직접 입력해 주세요.")
     } finally {
@@ -245,31 +326,40 @@ function SubmitDialog({
             </div>
           </div>
 
-          {/* 썸네일 미리보기 */}
+          {/* 썸네일 선택: og:image vs 메인화면 캡쳐 */}
           <div>
-            <label className="mb-1.5 block text-sm font-medium">썸네일</label>
-            <div className="overflow-hidden rounded-xl border border-border/60 bg-muted/30">
-              {form.thumbnail ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={form.thumbnail}
-                  alt="썸네일 미리보기"
-                  className="aspect-[16/9] w-full object-cover"
-                  onError={() => set("thumbnail", "")}
+            <label className="mb-1.5 block text-sm font-medium">
+              썸네일 {fetched && <span className="text-muted-foreground">(클릭해서 선택)</span>}
+            </label>
+
+            {fetched ? (
+              <div className="grid grid-cols-2 gap-2">
+                <ThumbChoice
+                  label="대표 이미지"
+                  src={ogImage}
+                  selected={!!ogImage && form.thumbnail === ogImage}
+                  onSelect={() => set("thumbnail", ogImage)}
+                  emptyText="이 사이트엔 없음"
                 />
-              ) : (
-                <div className="flex aspect-[16/9] w-full flex-col items-center justify-center gap-1.5 text-muted-foreground/60">
-                  <ImageIcon className="size-6" />
-                  <span className="text-xs">
-                    {fetched ? "썸네일을 찾지 못했습니다" : "가져오면 자동으로 표시됩니다"}
-                  </span>
-                </div>
-              )}
-            </div>
+                <ThumbChoice
+                  label="메인화면 캡쳐"
+                  src={shot}
+                  selected={!!shot && form.thumbnail === shot}
+                  onSelect={() => set("thumbnail", shot)}
+                  emptyText="캡쳐 불가"
+                />
+              </div>
+            ) : (
+              <div className="flex aspect-[16/6] w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border/60 bg-muted/20 text-muted-foreground/60">
+                <ImageIcon className="size-6" />
+                <span className="text-xs">가져오기를 누르면 후보가 표시됩니다</span>
+              </div>
+            )}
+
             <Input
               value={form.thumbnail}
               onChange={(e) => set("thumbnail", e.target.value)}
-              placeholder="이미지 URL (선택 · 직접 지정 가능)"
+              placeholder="이미지 URL (직접 지정도 가능)"
               className="mt-2 text-xs"
             />
           </div>

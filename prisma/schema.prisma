@@ -91,9 +91,10 @@ model CommunityPost {
   id          String   @id @default(cuid())
   title       String
   content     String
-  category    String   // question, prompt-share, use-case, news
+  category    String   // question, prompt-share, use-case, news, event
   author      String
   authorAvatar String?
+  poster      String?  // 강의·모임 안내 세로형 포스터 이미지 URL
   likes       Int      @default(0)
   comments    Int      @default(0)
   featured    Boolean  @default(false)
