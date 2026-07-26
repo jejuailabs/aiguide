@@ -96,7 +96,7 @@ export async function DELETE(
 
     await db.user.delete({ where: { id } })
     try {
-      await adminAuth().deleteUser(id)
+      await (await adminAuth()).deleteUser(id)
     } catch (e: any) {
       // Already gone from Auth (or never existed) — the profile is what matters.
       if (e?.code !== "auth/user-not-found") throw e

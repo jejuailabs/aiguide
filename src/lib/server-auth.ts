@@ -28,7 +28,7 @@ export async function requireUser(req: Request): Promise<Caller> {
 
   let decoded
   try {
-    decoded = await adminAuth().verifyIdToken(token)
+    decoded = await (await adminAuth()).verifyIdToken(token)
   } catch {
     throw new AuthError(401, "인증 정보가 유효하지 않습니다.")
   }

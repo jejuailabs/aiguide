@@ -28,13 +28,22 @@ export async function GET() {
   }
 
   try {
-    const { firestore } = await import("@/lib/firebase-admin")
+    const { firestore, adminAuth } = await import("@/lib/firebase-admin")
     report.adminModule = "ok"
+
     try {
       const snap = await firestore.collection("announcements").limit(1).get()
       report.firestore = `ok (${snap.size} docs)`
     } catch (e: any) {
       report.firestore = `${e?.code ?? "error"}: ${e?.message ?? String(e)}`
+    }
+
+    // Auth 는 별도로 잰다 — 여기서만 실패하면 회원 관리만 막히고 나머지는 산다.
+    try {
+      await adminAuth()
+      report.adminAuth = "ok"
+    } catch (e: any) {
+      report.adminAuth = `${e?.code ?? "error"}: ${e?.message ?? String(e)}`
     }
   } catch (e: any) {
     report.adminModule = `${e?.code ?? "error"}: ${e?.message ?? String(e)}`

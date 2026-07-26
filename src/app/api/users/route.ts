@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic"
  * would stay empty until every existing account happened to sign in again.
  */
 async function backfillFromAuth(known: Set<string>) {
-  const { users } = await adminAuth().listUsers(1000)
+  const { users } = await (await adminAuth()).listUsers(1000)
   const missing = users.filter((u) => !known.has(u.uid))
   if (missing.length === 0) return []
 
