@@ -1,12 +1,18 @@
 "use client"
 
 import { create } from "zustand"
-import { signInWithPopup, signOut as fbSignOut, onAuthStateChanged } from "firebase/auth"
+import {
+  signInWithPopup,
+  signOut as fbSignOut,
+  onAuthStateChanged,
+  type User as FirebaseUser,
+} from "firebase/auth"
 import { auth, googleProvider } from "./firebase-client"
+import type { Tier } from "./roles"
+import type { UserDTO } from "./types"
 
-export type Tier = "guest" | "free" | "premium" | "admin"
-
-const ADMIN_EMAILS = ["naggu1999@gmail.com"]
+export type { Tier } from "./roles"
+export { TIER_LABELS, TIER_STYLES } from "./roles"
 
 export interface User {
   id: string
@@ -25,13 +31,62 @@ interface AuthState {
   loginWithGoogle: () => Promise<User>
   loginAsGuest: () => void
   logout: () => void
-  upgrade: () => void
+  upgrade: () => Promise<void>
 }
 
 const KEY = "ai-guide-auth"
 
-function tierForEmail(email: string): Tier {
-  return ADMIN_EMAILS.includes(email.toLowerCase()) ? "admin" : "free"
+function cache(u: User | null) {
+  try {
+    if (u) localStorage.setItem(KEY, JSON.stringify(u))
+    else localStorage.removeItem(KEY)
+  } catch {}
+}
+
+function fromDTO(dto: UserDTO): User {
+  return {
+    id: dto.id,
+    name: dto.name,
+    email: dto.email,
+    avatar: dto.avatar,
+    tier: dto.tier,
+    provider: "google",
+    joinedAt: dto.createdAt,
+  }
+}
+
+/**
+ * Register/refresh the signed-in user's profile document and adopt the tier the
+ * server hands back — that's what makes admin-side tier changes take effect.
+ */
+async function syncProfile(fbUser: FirebaseUser, body?: Record<string, unknown>): Promise<User> {
+  const token = await fbUser.getIdToken()
+  const res = await fetch("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body ?? {}),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = new Error(data.error ?? "회원 정보 동기화에 실패했습니다.") as Error & { status?: number }
+    err.status = res.status
+    throw err
+  }
+  return fromDTO(data.user as UserDTO)
+}
+
+/**
+ * fetch() with the caller's Firebase ID token attached — required by every
+ * /api/users endpoint.
+ */
+export async function authFetch(url: string, init: RequestInit = {}) {
+  await auth.authStateReady()
+  const token = await auth.currentUser?.getIdToken()
+  if (!token) throw new Error("로그인이 필요합니다.")
+  return fetch(url, {
+    ...init,
+    headers: { ...(init.headers ?? {}), Authorization: `Bearer ${token}` },
+  })
 }
 
 export const useAuth = create<AuthState>((set, get) => ({
@@ -39,45 +94,48 @@ export const useAuth = create<AuthState>((set, get) => ({
   hydrated: false,
   hydrate: () => {
     if (get().hydrated) return
+
+    // Show the cached profile immediately, then let the server correct it.
     try {
       const raw = localStorage.getItem(KEY)
-      if (raw) {
-        const u = JSON.parse(raw) as User
-        set({ user: u, hydrated: true })
-        return
-      }
+      if (raw) set({ user: JSON.parse(raw) as User })
     } catch {}
     set({ hydrated: true })
 
-    onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser && !get().user) {
-        const u: User = {
-          id: fbUser.uid,
-          name: fbUser.displayName || fbUser.email?.split("@")[0] || "사용자",
-          email: fbUser.email || "",
-          avatar: (fbUser.displayName || "U").charAt(0),
-          tier: tierForEmail(fbUser.email || ""),
-          provider: "google",
-          joinedAt: new Date().toISOString(),
+    onAuthStateChanged(auth, async (fbUser) => {
+      if (!fbUser) {
+        // Guests live only in localStorage; a signed-out Google user is stale.
+        if (get().user?.provider === "google") {
+          cache(null)
+          set({ user: null })
         }
-        try { localStorage.setItem(KEY, JSON.stringify(u)) } catch {}
-        set({ user: u })
+        return
+      }
+      try {
+        const user = await syncProfile(fbUser)
+        cache(user)
+        set({ user })
+      } catch (e: any) {
+        // Rejected (blocked / bad token) — end the session. A transient network
+        // or server error leaves the cached profile in place.
+        if (e?.status === 401 || e?.status === 403) {
+          await fbSignOut(auth).catch(() => {})
+          cache(null)
+          set({ user: null })
+        }
       }
     })
   },
   loginWithGoogle: async () => {
     const result = await signInWithPopup(auth, googleProvider)
-    const fb = result.user
-    const user: User = {
-      id: fb.uid,
-      name: fb.displayName || fb.email?.split("@")[0] || "사용자",
-      email: fb.email || "",
-      avatar: (fb.displayName || "U").charAt(0),
-      tier: tierForEmail(fb.email || ""),
-      provider: "google",
-      joinedAt: new Date().toISOString(),
+    let user: User
+    try {
+      user = await syncProfile(result.user)
+    } catch (e) {
+      await fbSignOut(auth).catch(() => {})
+      throw e
     }
-    try { localStorage.setItem(KEY, JSON.stringify(user)) } catch {}
+    cache(user)
     set({ user })
     return user
   },
@@ -91,33 +149,22 @@ export const useAuth = create<AuthState>((set, get) => ({
       provider: "guest",
       joinedAt: new Date().toISOString(),
     }
-    try { localStorage.setItem(KEY, JSON.stringify(guest)) } catch {}
+    cache(guest)
     set({ user: guest })
   },
   logout: async () => {
     try { await fbSignOut(auth) } catch {}
-    try { localStorage.removeItem(KEY) } catch {}
+    cache(null)
     set({ user: null })
   },
-  upgrade: () => {
-    const u = get().user
-    if (!u) return
-    const next = { ...u, tier: "premium" as Tier }
-    try { localStorage.setItem(KEY, JSON.stringify(next)) } catch {}
-    set({ user: next })
+  upgrade: async () => {
+    const current = get().user
+    if (!current || current.provider !== "google") return
+    await auth.authStateReady()
+    const fbUser = auth.currentUser
+    if (!fbUser) return
+    const user = await syncProfile(fbUser, { upgrade: true })
+    cache(user)
+    set({ user })
   },
 }))
-
-export const TIER_LABELS: Record<Tier, string> = {
-  guest: "게스트",
-  free: "Free",
-  premium: "Premium",
-  admin: "Admin",
-}
-
-export const TIER_STYLES: Record<Tier, string> = {
-  guest: "bg-muted text-muted-foreground",
-  free: "bg-foreground/10 text-foreground",
-  premium: "bg-primary/15 text-primary ring-1 ring-primary/25",
-  admin: "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-1 ring-amber-500/30",
-}

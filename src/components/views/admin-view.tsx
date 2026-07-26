@@ -4,9 +4,11 @@ import * as React from "react"
 import { motion } from "framer-motion"
 import {
   Shield, Plus, Trash2, Pencil, Pin, Megaphone, Users, BookOpen, Wrench, Boxes,
-  Rocket, RefreshCw, AlertTriangle, Loader2, Check, X,
+  Rocket, RefreshCw, AlertTriangle, Loader2, Check, X, UserCog, Search, Ban,
+  ShieldCheck,
 } from "lucide-react"
-import { useAuth } from "@/lib/auth"
+import { useAuth, authFetch, TIER_LABELS, TIER_STYLES } from "@/lib/auth"
+import { TIERS, type Tier } from "@/lib/roles"
 import { useNav } from "@/lib/store"
 import { useFetch, timeAgo } from "@/lib/hooks"
 import { Card } from "@/components/ui/card"
@@ -26,6 +28,7 @@ import { Switch } from "@/components/ui/switch"
 import {
   COMMUNITY_CATEGORY_LABELS, type AnnouncementDTO, type CommunityPostDTO,
   type PromptDTO, type AIToolDTO, type MiniToolDTO, type VibeSolutionDTO,
+  type UserDTO,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -67,6 +70,7 @@ export function AdminView() {
   const { data: tools } = useFetch<{ tools: AIToolDTO[] }>("/api/tools")
   const { data: sols } = useFetch<{ solutions: VibeSolutionDTO[] }>("/api/solutions")
   const { data: minis } = useFetch<{ miniTools: MiniToolDTO[] }>("/api/minitools")
+  const members = useMembers(hydrated && user?.tier === "admin")
 
   if (!hydrated) {
     return <div className="mx-auto max-w-5xl px-4 py-20 text-center text-sm text-muted-foreground">로딩 중…</div>
@@ -88,6 +92,7 @@ export function AdminView() {
   }
 
   const stats = [
+    { label: "회원", value: members.list.length, icon: UserCog, color: "text-teal-500" },
     { label: "AI 도구", value: tools?.tools.length ?? 0, icon: Wrench, color: "text-amber-500" },
     { label: "프롬프트", value: prompts?.prompts.length ?? 0, icon: BookOpen, color: "text-rose-500" },
     { label: "미니툴", value: minis?.miniTools.length ?? 0, icon: Boxes, color: "text-emerald-500" },
@@ -122,7 +127,7 @@ export function AdminView() {
         </div>
       </motion.div>
 
-      <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {stats.map((s, i) => (
           <motion.div
             key={s.label}
@@ -139,9 +144,10 @@ export function AdminView() {
         ))}
       </div>
 
-      <Tabs defaultValue="announcements" className="mt-8">
+      <Tabs defaultValue="members" className="mt-8">
         <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-2xl bg-muted/40 p-1.5 no-scrollbar">
           {[
+            { v: "members", icon: UserCog, label: "회원" },
             { v: "announcements", icon: Megaphone, label: "공지사항" },
             { v: "community", icon: Users, label: "커뮤니티" },
             { v: "prompts", icon: BookOpen, label: "프롬프트" },
@@ -159,6 +165,9 @@ export function AdminView() {
           ))}
         </TabsList>
 
+        <TabsContent value="members" className="mt-5">
+          <MemberManager members={members} currentUserId={user.id} />
+        </TabsContent>
         <TabsContent value="announcements" className="mt-5">
           <CrudManager
             config={ANNOUNCEMENT_CONFIG}
@@ -202,6 +211,281 @@ export function AdminView() {
           />
         </TabsContent>
       </Tabs>
+    </div>
+  )
+}
+
+/* ===================== Member management ===================== */
+
+interface MembersState {
+  list: UserDTO[]
+  loading: boolean
+  error: string | null
+  reload: () => void
+  patch: (id: string, next: Partial<UserDTO>) => void
+  remove: (id: string) => void
+}
+
+/** Loads the member list. Unlike the content APIs, /api/users needs an ID token. */
+function useMembers(enabled: boolean): MembersState {
+  const [list, setList] = React.useState<UserDTO[]>([])
+  const [loading, setLoading] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [nonce, setNonce] = React.useState(0)
+
+  React.useEffect(() => {
+    if (!enabled) return
+    let active = true
+    setLoading(true)
+    setError(null)
+    authFetch("/api/users")
+      .then(async (r) => {
+        const json = await r.json()
+        if (!r.ok) throw new Error(json.error ?? "회원 목록을 불러오지 못했습니다")
+        return json
+      })
+      .then((json) => {
+        if (!active) return
+        setList(json.users as UserDTO[])
+        setLoading(false)
+      })
+      .catch((e) => {
+        if (!active) return
+        setError(e.message ?? "회원 목록을 불러오지 못했습니다")
+        setLoading(false)
+      })
+    return () => { active = false }
+  }, [enabled, nonce])
+
+  return {
+    list,
+    loading,
+    error,
+    reload: () => setNonce((n) => n + 1),
+    patch: (id, next) => setList((l) => l.map((u) => (u.id === id ? { ...u, ...next } : u))),
+    remove: (id) => setList((l) => l.filter((u) => u.id !== id)),
+  }
+}
+
+function MemberManager({
+  members,
+  currentUserId,
+}: {
+  members: MembersState
+  currentUserId: string
+}) {
+  const { list, loading, error, reload, patch, remove } = members
+  const [query, setQuery] = React.useState("")
+  const [busyId, setBusyId] = React.useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = React.useState<UserDTO | null>(null)
+
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? list.filter((u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    : list
+
+  const update = async (u: UserDTO, body: Partial<UserDTO>, successMsg: string) => {
+    setBusyId(u.id)
+    try {
+      const res = await authFetch(`/api/users/${u.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "수정 실패")
+      patch(u.id, data.user as UserDTO)
+      toast.success(successMsg)
+    } catch (e: any) {
+      toast.error(e.message ?? "수정에 실패했습니다")
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const destroy = async (u: UserDTO) => {
+    setBusyId(u.id)
+    try {
+      const res = await authFetch(`/api/users/${u.id}`, { method: "DELETE" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? "삭제 실패")
+      remove(u.id)
+      toast.success("회원이 삭제되었습니다")
+    } catch (e: any) {
+      toast.error(e.message ?? "삭제에 실패했습니다")
+    } finally {
+      setBusyId(null)
+      setDeleteTarget(null)
+    }
+  }
+
+  const tierCounts = TIERS.map((t) => ({ tier: t, n: list.filter((u) => u.tier === t).length }))
+    .filter((c) => c.n > 0)
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="font-serif text-lg font-semibold tracking-tight">회원 관리</h3>
+          <Badge variant="secondary" className="text-[0.65rem]">{list.length}명</Badge>
+          {tierCounts.map((c) => (
+            <span
+              key={c.tier}
+              className={cn("rounded-full px-2 py-0.5 text-[0.65rem] font-semibold", TIER_STYLES[c.tier])}
+            >
+              {TIER_LABELS[c.tier]} {c.n}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="이름·이메일 검색"
+              className="h-9 w-full pl-9 sm:w-56"
+            />
+          </div>
+          <Button variant="outline" size="sm" onClick={reload}>
+            <RefreshCw className="size-3.5" /> 새로고침
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-muted/50" />
+          ))
+        ) : error ? (
+          <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+            {error}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border/60 py-12 text-center text-sm text-muted-foreground">
+            {q ? "검색 결과가 없습니다" : "가입한 회원이 없습니다"}
+          </div>
+        ) : (
+          filtered.map((u) => (
+            <div
+              key={u.id}
+              className={cn(
+                "flex flex-wrap items-center gap-3 rounded-xl border border-border/60 bg-card p-3.5 transition-colors hover:border-border",
+                u.blocked && "opacity-60"
+              )}
+            >
+              <span
+                className={cn(
+                  "flex size-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ring-1",
+                  u.tier === "admin"
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 ring-amber-500/30"
+                    : "bg-gradient-to-br from-primary/25 to-primary/5 ring-primary/15"
+                )}
+              >
+                {u.avatar}
+              </span>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="truncate text-sm font-medium">{u.name}</p>
+                  {u.id === currentUserId && (
+                    <Badge variant="outline" className="border-primary/30 text-primary text-[0.6rem]">나</Badge>
+                  )}
+                  {u.blocked && (
+                    <Badge variant="outline" className="border-destructive/30 text-destructive text-[0.6rem]">
+                      <Ban className="mr-1 size-2.5" />차단됨
+                    </Badge>
+                  )}
+                </div>
+                <p className="truncate text-xs text-muted-foreground">{u.email || "이메일 없음"}</p>
+              </div>
+
+              <div className="hidden shrink-0 text-right text-xs text-muted-foreground lg:block">
+                <div>가입 {timeAgo(u.createdAt)}</div>
+                <div>{u.lastLoginAt ? `최근 접속 ${timeAgo(u.lastLoginAt)}` : "접속 기록 없음"}</div>
+              </div>
+
+              <select
+                value={u.tier}
+                disabled={busyId === u.id}
+                onChange={(e) =>
+                  update(u, { tier: e.target.value as Tier }, `${u.name}님의 등급을 변경했습니다`)
+                }
+                className="h-9 shrink-0 rounded-lg border border-border bg-background px-2 text-xs disabled:opacity-50"
+                aria-label="등급 변경"
+              >
+                {TIERS.filter((t) => t !== "guest").map((t) => (
+                  <option key={t} value={t}>{TIER_LABELS[t]}</option>
+                ))}
+              </select>
+
+              <button
+                onClick={() =>
+                  update(
+                    u,
+                    { blocked: !u.blocked },
+                    u.blocked ? `${u.name}님의 차단을 해제했습니다` : `${u.name}님을 차단했습니다`
+                  )
+                }
+                disabled={busyId === u.id}
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50",
+                  u.blocked
+                    ? "text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                )}
+                aria-label={u.blocked ? "차단 해제" : "차단"}
+                title={u.blocked ? "차단 해제" : "차단"}
+              >
+                {busyId === u.id ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : u.blocked ? (
+                  <ShieldCheck className="size-4" />
+                ) : (
+                  <Ban className="size-4" />
+                )}
+              </button>
+
+              <button
+                onClick={() => setDeleteTarget(u)}
+                disabled={busyId === u.id || u.id === currentUserId}
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                aria-label="회원 삭제"
+                title="회원 삭제"
+              >
+                <Trash2 className="size-4" />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="size-5 text-destructive" /> 회원을 삭제하시겠습니까?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-medium text-foreground">
+                {deleteTarget?.name} ({deleteTarget?.email})
+              </span>{" "}
+              회원의 프로필과 로그인 계정이 함께 삭제되어 다시 로그인할 수 없습니다.
+              접근만 막으려면 삭제 대신 차단을 사용하세요. 이 작업은 되돌릴 수 없습니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel><X className="size-4" /> 취소</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteTarget && destroy(deleteTarget)}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              <Trash2 className="size-4" /> 삭제
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -135,6 +135,28 @@ function createCollectionHandle(collectionName: string) {
     },
 
     /**
+     * upsert({ where: { id }, create, update })
+     *
+     * Unlike `create`, the document id is caller-supplied — used for records
+     * keyed by an external identity (e.g. a Firebase Auth uid).
+     */
+    async upsert(opts: {
+      where: { id: string }
+      create: Record<string, any>
+      update: Record<string, any>
+    }) {
+      const ref = col().doc(opts.where.id)
+      const snap = await ref.get()
+      const now = new Date()
+      if (snap.exists) {
+        await ref.update({ ...opts.update, updatedAt: now })
+      } else {
+        await ref.set({ ...opts.create, createdAt: now, updatedAt: now })
+      }
+      return normalizeDoc(await ref.get()) as Record<string, any>
+    },
+
+    /**
      * findUnique({ where: { id } })
      */
     async findUnique(opts: { where: { id: string } }) {
@@ -165,4 +187,5 @@ export const db = {
   vibeSolution: createCollectionHandle("vibeSolutions"),
   communityPost: createCollectionHandle("communityPosts"),
   announcement: createCollectionHandle("announcements"),
+  user: createCollectionHandle("users"),
 }

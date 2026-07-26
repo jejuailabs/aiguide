@@ -1,5 +1,19 @@
 // Shared domain types for AI Guide Portal
 
+import type { Tier } from "./roles"
+
+export interface UserDTO {
+  id: string
+  name: string
+  email: string
+  avatar: string
+  tier: Tier
+  provider: string
+  blocked: boolean
+  createdAt: string
+  lastLoginAt: string | null
+}
+
 export interface AIToolDTO {
   id: string
   name: string

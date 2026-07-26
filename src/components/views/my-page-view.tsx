@@ -156,7 +156,14 @@ export function MyPageView() {
             <Button
               size="lg"
               className="shrink-0 shadow-lg shadow-primary/20"
-              onClick={() => { upgrade(); toast.success("Premium으로 업그레이드되었습니다!") }}
+              onClick={async () => {
+                try {
+                  await upgrade()
+                  toast.success("Premium으로 업그레이드되었습니다!")
+                } catch (e: any) {
+                  toast.error(e?.message ?? "업그레이드에 실패했습니다")
+                }
+              }}
             >
               <Crown className="size-4" /> 업그레이드
             </Button>
