@@ -13,4 +13,7 @@ if (!getApps().length) {
 }
 
 export const firestore = getFirestore()
-export const adminAuth = getAuth()
+
+/** Resolved per call rather than at module load, so an Auth-side failure can't
+ *  take down the Firestore-backed routes that share this module. */
+export const adminAuth = () => getAuth()
