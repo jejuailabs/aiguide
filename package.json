@@ -2,8 +2,12 @@
   "name": "nextjs_tailwind_shadcn_ts",
   "version": "0.2.0",
   "private": true,
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "^4.15.9"
+    }
+  },
   "engines": {
-    "//": "Node 24 에서는 jwks-rsa(firebase-admin 의존) 가 ESM 전용 jose 를 require 하다 ERR_REQUIRE_ESM 으로 죽어 회원 관리 API 가 동작하지 않는다. 22.x 에서는 정상.",
     "node": "22.x"
   },
   "scripts": {
